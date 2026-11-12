@@ -11,11 +11,32 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 20
       - name: Install build dependencies on the runner
         run: sudo apt-get update && sudo apt-get install -y build-essential libsdl2-dev libasound2-dev zip perl xvfb xdotool ffmpeg
       - name: Navigation regression tests
         run: python3 -m unittest discover -s tools/emepetres/tests -p 'test_*.py' -v
+      - name: Check whether verified simulator binaries can be reused
+        id: reuse
+        run: |
+          # This seed run built both simulators successfully. Reuse is allowed
+          # only when every firmware/build input is identical, irrespective of
+          # changes to docs, CI orchestration or the separate Windows/test tools.
+          if git diff --quiet d54edb3b55c6ba74f24d6ed1e1a1bdd9adc7cfa2 HEAD -- . ':!docs' ':!.github' ':!tools/emepetres'; then
+            echo 'verified=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'verified=false' >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/download-artifact@v4
+        if: steps.reuse.outputs.verified == 'true'
+        with:
+          name: emepetres-linux-simulators-NOT-FIRMWARE
+          run-id: 43270897309
+          github-token: ${{ github.token }}
+          path: .
       - name: Build both simulators
+        if: steps.reuse.outputs.verified != 'true'
         run: |
           for target in agptekrocker agptekrockernative; do
             mkdir "build-$target"
@@ -27,6 +48,7 @@ jobs:
           done
       - name: Launch simulators with an isolated synthetic music library
         run: |
+          chmod +x build-agptekrocker/rockboxui build-agptekrockernative/rockboxui
           xvfb-run -a python3 tools/emepetres/tests/simulator_smoke.py build-agptekrocker
           xvfb-run -a python3 tools/emepetres/tests/simulator_smoke.py build-agptekrockernative
       - uses: actions/upload-artifact@v4

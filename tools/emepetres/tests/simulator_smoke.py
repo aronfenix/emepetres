@@ -37,7 +37,9 @@ with tempfile.TemporaryDirectory(prefix='emepetres-simulator-') as tmp:
         proc = subprocess.Popen([str(build / 'rockboxui'), '--nobackground',
                                  '--root', str(sandbox)], env=env, cwd=build,
                                 stdout=log, stderr=subprocess.STDOUT)
-        time.sleep(4)
+        # The startup logo can still be visible at four seconds when logging
+        # and the database are initialized. Do not send navigation into boot.
+        time.sleep(9)
         assert proc.poll() is None, 'simulator exited during startup'
         window = subprocess.check_output(
             ['xdotool', 'search', '--sync', '--pid', str(proc.pid)], timeout=10,
@@ -67,7 +69,7 @@ with tempfile.TemporaryDirectory(prefix='emepetres-simulator-') as tmp:
             time.sleep(0.6)
 
         def capture(name):
-            subprocess.run(['ffmpeg', '-v', 'error', '-f', 'x11grab',
+            subprocess.run(['ffmpeg', '-y', '-v', 'error', '-f', 'x11grab',
                             '-video_size', geometry['WIDTH'] + 'x' + geometry['HEIGHT'],
                             '-i', os.environ['DISPLAY'] + '+' + geometry['X'] + ',' + geometry['Y'],
                             '-frames:v', '1', str(results / f'{name}.png')], check=True)
