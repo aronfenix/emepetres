@@ -110,12 +110,21 @@ with tempfile.TemporaryDirectory(prefix='emepetres-simulator-') as tmp:
         key('Return')
         key('Return')  # Play the selected synthetic 31-second FLAC.
         capture('08-playback')
-        time.sleep(16)
-        subprocess.run(['xdotool', 'keydown', 'Return'], check=True)
-        time.sleep(0.9)  # Long Select = Stop, retaining its original playback binding.
-        subprocess.run(['xdotool', 'keyup', 'Return'], check=True)
+        raw = sandbox / '.rockbox/emepetres_playback.log'
+        # Loading and dummy audio on a busy runner are not guaranteed to run at
+        # wall-clock speed. Wait for the completed track's durable record rather
+        # than treating 16 seconds of wall time as 16 seconds of consumed audio.
+        for _ in range(90):
+            rows = raw.read_text(errors='replace').splitlines() if raw.exists() else []
+            if any(line and not line.startswith('#') and len(line.split(':', 3)) == 4
+                   for line in rows):
+                break
+            assert proc.poll() is None, 'simulator exited during playback'
+            time.sleep(1)
+        else:
+            raise AssertionError('synthetic playback did not finish within the runtime limit')
         time.sleep(1)
-        home()  # Stop returns to the previous library; the chord opens Home.
+        home()  # Playback completion returns to the library; the chord opens Home.
         capture('09-home-after-playback')
         key('Down'); key('Down'); key('Down')  # Artists -> Albums -> Search -> Last.fm.
         key('Return')
@@ -123,7 +132,6 @@ with tempfile.TemporaryDirectory(prefix='emepetres-simulator-') as tmp:
         key('Return')  # Prepare synchronization, preserving raw source logs.
         time.sleep(6)
         capture('11-lastfm-export')
-        raw = sandbox / '.rockbox/emepetres_playback.log'
         exported = sandbox / '.emepetres-scrobbler.log'
         assert raw.is_file(), 'offline listening record missing'
         assert exported.is_file(), 'Last.fm export missing'
