@@ -21,6 +21,7 @@
 #define PCMBUF_H
 
 #include <sys/types.h>
+#include <stdint.h>
 
 /* Commit PCM data */
 void *pcmbuf_request_buffer(int *count);
@@ -34,6 +35,9 @@ size_t pcmbuf_init(void *bufend);
 void pcmbuf_play_start(void);
 void pcmbuf_play_stop(void);
 void pcmbuf_pause(bool pause);
+#ifdef HAVE_EMEPETRES_HOME
+uint64_t pcmbuf_get_played_usec(void);
+#endif
 
 /* Track change */
 

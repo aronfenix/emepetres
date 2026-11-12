@@ -159,6 +159,23 @@ static struct configdata config[] =
 };
 const int gCfg_sz = sizeof(config)/sizeof(*config);
 static long yield_tick = 0;
+static bool emepetres_export;
+static bool export_io_failed;
+
+static const char *pbl_prefix(void)
+{
+    return emepetres_export ? "emepetres_playback" : PLAYBACK_LOG;
+}
+
+static bool pbl_has_log(void)
+{
+    char filename[MAX_PATH];
+    rb->snprintf(filename, sizeof(filename), "%s/%s.log", PLAYBACK_LOG_DIR, pbl_prefix());
+    if (rb->file_exists(filename))
+        return true;
+    rb->snprintf(filename, sizeof(filename), "%s/%s_0001.log", PLAYBACK_LOG_DIR, pbl_prefix());
+    return rb->file_exists(filename);
+}
 
 /****************** config functions *****************/
 static void config_set_defaults(void)
@@ -319,8 +336,7 @@ static int scrobbler_menu(bool resume)
     const unsigned int flags = settings_menu.flags & (~MENU_ITEM_COUNT(MENU_COUNT_MASK));
 
 
-    bool has_log = (rb->file_exists(ROCKBOX_DIR "/playback.log")
-                 || rb->file_exists(ROCKBOX_DIR "/playback_0001.log"));
+    bool has_log = pbl_has_log();
 
     do {
         if (!has_log)
@@ -416,8 +432,16 @@ static inline const char* str_chk_valid(char *s, const char *alt)
 
 static unsigned long sbl_get_threshold(unsigned long length_ms)
 {
+    if (emepetres_export)
+        return MIN(length_ms / 2, 240000UL);
     /* length is assumed to be in miliseconds */
     return length_ms / 100 * gConfig.savepct;
+}
+
+static bool sbl_is_listened(struct scrobbler_entry *entry)
+{
+    return (!emepetres_export || entry->length > 30000)
+        && entry->elapsed >= sbl_get_threshold(entry->length);
 }
 
 static int sbl_create_entry(struct scrobbler_entry *entry, int output_fd)
@@ -432,7 +456,7 @@ static int sbl_create_entry(struct scrobbler_entry *entry, int output_fd)
     else
         path++; /* remove slash */
     char rating = 'S'; /* Skipped */
-    if (entry->elapsed >= sbl_get_threshold(entry->length))
+    if (sbl_is_listened(entry))
         rating = 'L'; /* Listened */
 
 #if (CONFIG_RTC)
@@ -458,11 +482,12 @@ static int sbl_create_entry(struct scrobbler_entry *entry, int output_fd)
             "%d"SEP"%ld"SEP"%c"SEP"%lu"SEP"%s"EOL"",
             -1, (long)(entry->length / 1000), rating, timestamp, "");
 
-        rb->fdprintf(output_fd,"%s"SEP"%s"SEP"%s"SEP"%s",
+        if (rb->fdprintf(output_fd,"%s"SEP"%s"SEP"%s"SEP"%s",
                      UNTAGGED,
                      "",
                      path,
-                     track_len_rate_timestamp_mbid);
+                     track_len_rate_timestamp_mbid) < 0)
+            return SCROBBLER_LOG_ERROR;
         return SCROBBLER_LOG_NOMETADATA;
     }
 
@@ -479,11 +504,12 @@ static int sbl_create_entry(struct scrobbler_entry *entry, int output_fd)
         "%d"SEP"%ld"SEP"%c"SEP"%lu"SEP"%s"EOL"", track, (long)(entry->length / 1000),
         rating, timestamp, str_chk_valid(id->mb_track_id, ""));
 
-    rb->fdprintf(output_fd,"%s"SEP"%s"SEP"%s"SEP"%s",
+    if (rb->fdprintf(output_fd,"%s"SEP"%s"SEP"%s"SEP"%s",
                  str_chk_valid(artist, UNTAGGED),
                  str_chk_valid(id->album, ""),
                  str_chk_valid(id->title, path),
-                 track_len_rate_timestamp_mbid);
+                 track_len_rate_timestamp_mbid) < 0)
+        return SCROBBLER_LOG_ERROR;
     #undef SEP
     #undef EOL
     return SCROBBLER_LOG_OK;
@@ -496,7 +522,8 @@ static int sbl_check_or_open(bool check_only)
     char scrobbler_file[MAX_PATH];
     int fd;
     int used;
-    used = rb->snprintf(scrobbler_file, sizeof(scrobbler_file), "/%s", BASE_FILENAME);
+    used = rb->snprintf(scrobbler_file, sizeof(scrobbler_file), "/%s",
+                       emepetres_export ? HOME_DIR "/.emepetres-scrobbler.tmp" : BASE_FILENAME);
 
     if (used <= 0 || used >= (int)sizeof(scrobbler_file))
     {
@@ -518,19 +545,26 @@ static int sbl_check_or_open(bool check_only)
 
     if (check_only)
         return exists ? 1: 0;
+    if (emepetres_export)
+        exists = false; /* Regenerate a complete snapshot, never append it twice. */
 
     /* If the file doesn't exist, create it. */
     if(!exists)
     {
-        fd = rb->open(scrobbler_file, O_WRONLY | O_CREAT, 0666);
+        fd = rb->open(scrobbler_file, O_WRONLY | O_CREAT |
+                       (emepetres_export ? O_TRUNC : 0), 0666);
         if(fd >= 0)
         {
             /* write file header */
-            rb->fdprintf(fd, "#AUDIOSCROBBLER/" SCROBBLER_VERSION "\n"
-                         "#TZ/UNKNOWN\n" "#CLIENT/Rockbox "
+            if (rb->fdprintf(fd, "#AUDIOSCROBBLER/" SCROBBLER_VERSION "\n"
+                         "#TZ/UNKNOWN\n" "#CLIENT/%s "
                          TARGET_NAME " %s "
-                         HDR_STR_TIMELESS "\n", rb->rbversion);
-            rb->fdprintf(fd, ITEM_HDR);
+                         HDR_STR_TIMELESS "\n", emepetres_export ? "emepetres" : "Rockbox", rb->rbversion) < 0
+                || rb->fdprintf(fd, ITEM_HDR) < 0)
+            {
+                rb->close(fd);
+                return -1;
+            }
         }
         else
         {
@@ -769,8 +803,17 @@ static int pbl_copyloop(int fd_copy, const char *src_filename,
         return -1;
     }
 
+    off_t snapshot_end = -1;
+    if (emepetres_export)
+    {
+        off_t pos = rb->lseek(fd_src, 0, SEEK_CUR);
+        snapshot_end = rb->lseek(fd_src, 0, SEEK_END);
+        rb->lseek(fd_src, pos, SEEK_SET);
+    }
     while(rb->read_line(fd_src, buf, buf_sz) > 0)
     {
+        if (emepetres_export && rb->lseek(fd_src, 0, SEEK_CUR) > snapshot_end)
+            break; /* A concurrently appended row belongs to the next snapshot. */
         char skipch = ' ';
 #if defined(ROCKBOX_HAS_LOGF)
         line_num++;
@@ -781,7 +824,11 @@ static int pbl_copyloop(int fd_copy, const char *src_filename,
         if (buf[0] == '#') /*copy comments*/
         {
             lines_copied++;
-            rb->fdprintf(fd_copy, "%s\n", buf);
+            if (rb->fdprintf(fd_copy, "%s\n", buf) < 0)
+            {
+                export_io_failed = true;
+                break;
+            }
             continue;
         }
         /* parse entry will fail if elapsed > length or other invalid entry */
@@ -802,8 +849,12 @@ static int pbl_copyloop(int fd_copy, const char *src_filename,
         /* add a space (or !) to beginning of every line pbl_remove_duplicates
         * will use this to prepend '@' to entries that will be ignored
         * rewrite entry to ensure valid formatting of the parsed fields*/
-        rb->fdprintf(fd_copy, "%c%lu:%lu:%lu:%s\n", skipch,
-                     entry.timestamp, entry.elapsed, entry.length, entry.path);
+        if (rb->fdprintf(fd_copy, "%c%lu:%lu:%lu:%s\n", skipch,
+                     entry.timestamp, entry.elapsed, entry.length, entry.path) < 0)
+        {
+            export_io_failed = true;
+            break;
+        }
         count++;
         lines_copied++;
         if (TIME_AFTER(*rb->current_tick, next_tick))
@@ -833,19 +884,23 @@ static int pbl_copymerge_logs(int fd_copy, char *buf, size_t buf_sz, int *lines)
 
     /* We don't want any writes while copying and (possibly) deleting the log */
     bool log_enabled = rb->global_settings->playback_log;
-    rb->global_settings->playback_log = false;
+    if (!emepetres_export)
+        rb->global_settings->playback_log = false;
 
-    copied = pbl_copyloop(fd_copy, PLAYBACK_LOG_DIR "/"PLAYBACK_LOG".log",
+    rb->snprintf(filename, sizeof(filename), "%s/%s.log", PLAYBACK_LOG_DIR, pbl_prefix());
+    copied = pbl_copyloop(fd_copy, filename,
                        buf, buf_sz, &total_tracks, &total_lines);
 
-    if (gConfig.delete_log && copied > 0)
+    if (!emepetres_export && gConfig.delete_log && copied > 0)
     {
-        rb->remove(PLAYBACK_LOG_DIR "/"PLAYBACK_LOG".log");
+        rb->remove(filename);
     }
-    rb->global_settings->playback_log = log_enabled;
+    if (!emepetres_export)
+        rb->global_settings->playback_log = log_enabled;
 
     if (copied < 0)
     {
+        export_io_failed = true;
         rb->sleep(HZ * 2); /* to let user see fail message */
     }
 
@@ -853,7 +908,7 @@ static int pbl_copymerge_logs(int fd_copy, char *buf, size_t buf_sz, int *lines)
     for (int i = 1; i < 9999; i++)
     {
         rb->snprintf(filename, sizeof(filename), "%s/%s_%0*d%s",
-                 PLAYBACK_LOG_DIR, PLAYBACK_LOG, 4, i, ".log");
+                 PLAYBACK_LOG_DIR, pbl_prefix(), 4, i, ".log");
 
         if (!rb->file_exists(filename))
         {
@@ -863,7 +918,7 @@ static int pbl_copymerge_logs(int fd_copy, char *buf, size_t buf_sz, int *lines)
         copied = pbl_copyloop(fd_copy, filename, buf, buf_sz, &total_tracks, &total_lines);
         if (copied > 0)
         {
-            if (gConfig.delete_log)
+            if (!emepetres_export && gConfig.delete_log)
             {
                 rb->remove(filename);
             }
@@ -889,8 +944,10 @@ static int sbl_export(void)
     int lines_total  = 0;
     int tracks_saved = 0;
     int missing_meta = 0;
-    int scrobbler_fd;
-    int fd_copy = rb->open(PLAYBACK_LOG_DIR "/"PLAYBACK_LOG"_old.log", O_RDWR | O_CREAT | O_TRUNC, 0666);
+    int scrobbler_fd = -1;
+    export_io_failed = false;
+    rb->snprintf(buf, sizeof(buf), "%s/%s_old.log", PLAYBACK_LOG_DIR, pbl_prefix());
+    int fd_copy = rb->open(buf, O_RDWR | O_CREAT | O_TRUNC, 0666);
     if (fd_copy < 0)
     {
         logf("Scrobbler Error opening: %s\n", PLAYBACK_LOG_DIR "/"PLAYBACK_LOG"_old.log");
@@ -901,6 +958,8 @@ static int sbl_export(void)
     rb->fdprintf(fd_copy, "#Parsed Playback log tags: '#' comment, '!' too short, '@' duplicate\n");
 
     tracks_total = pbl_copymerge_logs(fd_copy, buf, sizeof(buf), &lines_total);
+    if (emepetres_export && export_io_failed)
+        goto entry_error;
     logf("%s %d tracks copied %d lines copied\n", __func__, tracks_total, lines_total);
 
     if (tracks_total > 0)
@@ -953,8 +1012,18 @@ static int sbl_export(void)
                 tracks_saved++;
                 /* process our valid entry */
             }
-            rb->close(scrobbler_fd);
+            if (rb->close(scrobbler_fd) < 0)
+            {
+                scrobbler_fd = -1;
+                goto entry_error;
+            }
+            scrobbler_fd = -1;
+            if (emepetres_export && rb->rename(HOME_DIR "/.emepetres-scrobbler.tmp",
+                                              HOME_DIR "/.emepetres-scrobbler.log") < 0)
+                goto entry_error;
         }
+        else if (emepetres_export)
+            goto entry_error;
         logf("%s %d tracks saved", __func__, tracks_saved);
     }
     rb->close(fd_copy);
@@ -980,6 +1049,7 @@ enum plugin_status plugin_start(const void* parameter)
 {
     bool resume;
     const char * param_str = (const char*) parameter;
+    emepetres_export = parameter && rb->strcmp(param_str, "-emepetres-export") == 0;
     resume = (parameter && param_str[0] == '-'
              && rb->strcasecmp(param_str, "-resume") == 0);
 
@@ -997,6 +1067,19 @@ enum plugin_status plugin_start(const void* parameter)
 
     config_set_defaults();
 
+    if (emepetres_export)
+    {
+        /* Preserve every source log and genuine repeated listen. Windows owns
+         * submission deduplication; this action never deletes playback logs. */
+        gConfig.delete_log = false;
+        gConfig.remove_dup = 0;
+        gConfig.tracknfo = 1;
+        if (pbl_has_log())
+            return sbl_export();
+        rb->splashf(HZ, "0 %s", rb->str(LANG_TRACKS));
+        return PLUGIN_OK;
+    }
+
     if (configfile_load(CFG_FILE, config, gCfg_sz, CFG_VER) < 0)
     {
         /* If the loading failed, save a new config file */
@@ -1009,8 +1092,7 @@ enum plugin_status plugin_start(const void* parameter)
         if (rb->strcasestr(rb->tree_get_context()->currdir, PLUGIN_APPS_DIR) == NULL)
         {
             logf("Auto Export - Last screen: %d", rb->global_status->last_screen);
-            if (rb->file_exists(ROCKBOX_DIR "/playback.log")
-             || rb->file_exists(ROCKBOX_DIR "/playback_0001.log"))
+            if (pbl_has_log())
             {
                 return scrobbler_menu_action(10, true); /* export scrobbler file */
             }

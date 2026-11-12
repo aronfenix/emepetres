@@ -224,6 +224,21 @@ static int first_visible_item_history[MAX_DIR_LEVELS];
 static int table_history[MAX_DIR_LEVELS];
 static int extra_history[MAX_DIR_LEVELS];
 
+#ifdef HAVE_EMEPETRES_HOME
+/* IDs, not movable buflib pointers, own each Home route's navigation history. */
+struct shortcut_state {
+    bool valid;
+    int dirlevel, selected_item, currtable, currextra, base, history_level;
+    int csi_menu, csi_item, result_seek[MAX_TAGS];
+    int selected[MAX_DIR_LEVELS], first[MAX_DIR_LEVELS];
+    int table[MAX_DIR_LEVELS], extra[MAX_DIR_LEVELS];
+    char title[MAX_TAGS][128];
+};
+static struct shortcut_state shortcut_states[TAGTREE_SHORTCUT_COUNT];
+static enum tagtree_shortcut current_shortcut;
+static int shortcut_base;
+#endif
+
 /* a few memory alloc helper */
 static int tagtree_handle;
 static size_t tagtree_bufsize, tagtree_buf_used;
@@ -1431,6 +1446,11 @@ static void tagtree_unload(struct tree_context *c)
 static bool initialize_tagtree(void) /* also used when user selects 'Reload' in 'custom menu'*/
 {
     max_history_level = 0;
+#ifdef HAVE_EMEPETRES_HOME
+    memset(shortcut_states, 0, sizeof(shortcut_states));
+    current_shortcut = TAGTREE_DATABASE;
+    shortcut_base = 0;
+#endif
     memset(first_visible_item_history, 0, sizeof(first_visible_item_history));
     format_count = 0;
     menu_count = 0;
@@ -2361,6 +2381,125 @@ int tagtree_get_scroll(struct tree_context *c)
         return first_visible_item_history[c->dirlevel];
     return 0;
 }
+
+#ifdef HAVE_EMEPETRES_HOME
+static void shortcut_save(struct tree_context *c)
+{
+    struct shortcut_state *s = &shortcut_states[current_shortcut];
+    s->valid = true;
+    s->dirlevel = c->dirlevel;
+    s->selected_item = c->selected_item;
+    s->currtable = c->currtable;
+    s->currextra = c->currextra;
+    s->base = shortcut_base;
+    s->history_level = max_history_level;
+    s->csi_menu = s->csi_item = -1;
+    for (int i = 0; i < menu_count; ++i)
+        for (int j = 0; j < menus[i]->itemcount; ++j)
+            if (csi == &menus[i]->items[j]->si)
+            {
+                s->csi_menu = i;
+                s->csi_item = j;
+                memcpy(s->result_seek, csi->result_seek, sizeof(s->result_seek));
+            }
+    memcpy(s->selected, selected_item_history, sizeof(s->selected));
+    memcpy(s->first, first_visible_item_history, sizeof(s->first));
+    memcpy(s->table, table_history, sizeof(s->table));
+    memcpy(s->extra, extra_history, sizeof(s->extra));
+    memcpy(s->title, current_title, sizeof(s->title));
+}
+
+static void shortcut_restore(struct tree_context *c, const struct shortcut_state *s)
+{
+    c->dirlevel = s->dirlevel;
+    c->selected_item = s->selected_item;
+    c->currtable = s->currtable;
+    c->currextra = s->currextra;
+    shortcut_base = s->base;
+    max_history_level = s->history_level;
+    csi = s->csi_menu < 0 ? NULL : &menus[s->csi_menu]->items[s->csi_item]->si;
+    if (csi)
+        memcpy(csi->result_seek, s->result_seek, sizeof(s->result_seek));
+    memcpy(selected_item_history, s->selected, sizeof(s->selected));
+    memcpy(first_visible_item_history, s->first, sizeof(s->first));
+    memcpy(table_history, s->table, sizeof(s->table));
+    memcpy(extra_history, s->extra, sizeof(s->extra));
+    memcpy(current_title, s->title, sizeof(s->title));
+    c->dirfull = false;
+    loaded_entries_crc = 0;
+}
+
+bool tagtree_open_shortcut(struct tree_context *c, enum tagtree_shortcut shortcut)
+{
+    static const char * const ids[TAGTREE_SHORTCUT_COUNT] = {
+        NULL, "emepetres_artists", "emepetres_albums", "emepetres_search",
+        "emepetres_shuffle"
+    };
+    if (shortcut < 0 || shortcut >= TAGTREE_SHORTCUT_COUNT)
+        return false;
+    int target = -1;
+    for (int i = 0; i < menu_count && ids[shortcut]; ++i)
+        if (!strcmp(menus[i]->id, ids[shortcut]) && menus[i]->itemcount > 0)
+            target = i;
+    if (shortcut != TAGTREE_DATABASE && target < 0)
+    {
+        if (current_shortcut != TAGTREE_DATABASE)
+        {
+            shortcut_save(c);
+            current_shortcut = TAGTREE_DATABASE;
+            shortcut_restore(c, &shortcut_states[TAGTREE_DATABASE]);
+        }
+        return false;
+    }
+    if (shortcut == current_shortcut && shortcut != TAGTREE_SHUFFLE)
+        return true;
+
+    shortcut_save(c);
+    current_shortcut = shortcut;
+    if (shortcut_states[shortcut].valid && shortcut != TAGTREE_SHUFFLE)
+    {
+        shortcut_restore(c, &shortcut_states[shortcut]);
+        return true;
+    }
+
+    /* A user's own DB config may not provide our reserved entry points. */
+    if (target < 0)
+        current_shortcut = TAGTREE_DATABASE;
+    memset(selected_item_history, 0, sizeof(selected_item_history));
+    memset(first_visible_item_history, 0, sizeof(first_visible_item_history));
+    memset(table_history, 0, sizeof(table_history));
+    memset(extra_history, 0, sizeof(extra_history));
+    memset(current_title, 0, sizeof(current_title));
+    max_history_level = 0;
+    csi = NULL;
+    c->dirlevel = target < 0 ? 0 : 1;
+    c->selected_item = 0;
+    c->currtable = TABLE_ROOT;
+    c->currextra = target < 0 ? rootmenu : target;
+    c->dirfull = false;
+    loaded_entries_crc = 0;
+    shortcut_base = c->dirlevel;
+    if (target < 0)
+        return false;
+    if (tagtree_load(c) <= 0)
+    {
+        current_shortcut = TAGTREE_DATABASE;
+        shortcut_restore(c, &shortcut_states[TAGTREE_DATABASE]);
+        return false;
+    }
+    if (shortcut == TAGTREE_ARTISTS || shortcut == TAGTREE_ALBUMS)
+    {
+        tagtree_enter(c, true);
+        shortcut_base = c->dirlevel;
+    }
+    return true;
+}
+
+bool tagtree_at_shortcut_root(struct tree_context *c)
+{
+    return current_shortcut != TAGTREE_DATABASE && c->dirlevel <= shortcut_base;
+}
+#endif
 
 /* Exits current database menu or table */
 void tagtree_exit(struct tree_context* c, bool is_visible)

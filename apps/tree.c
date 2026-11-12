@@ -766,14 +766,21 @@ static int dirbrowse(void)
         return exit_to_new_screen(GO_TO_PREVIOUS);  /* No files found for rockbox_browse() */
     }
 
+    bool start_shuffle = (tc.browse->flags & BROWSE_SHUFFLE) != 0;
     while(tc.browse && tc.is_browsing) {
         bool restore = false;
         if (tc.dirlevel < 0)
             tc.dirlevel = 0; /* shouldnt be needed.. this code needs work! */
 
         keyclick_set_callback(gui_synclist_keyclick_callback, &tree_lists);
-        button = get_action(CONTEXT_TREE|ALLOW_SOFTLOCK,
-                            list_do_action_timeout(&tree_lists, HZ/2));
+        if (start_shuffle)
+        {
+            button = ACTION_STD_OK;
+            start_shuffle = false;
+        }
+        else
+            button = get_action(CONTEXT_TREE|ALLOW_SOFTLOCK,
+                                list_do_action_timeout(&tree_lists, HZ/2));
         oldbutton = button;
         gui_synclist_do_button(&tree_lists, &button);
         tc.selected_item = gui_synclist_get_sel_pos(&tree_lists);
@@ -836,6 +843,10 @@ static int dirbrowse(void)
 
             case ACTION_STD_CANCEL:
                 exit_to_new_screen(0);
+#ifdef HAVE_EMEPETRES_HOME
+                if (id3db && tagtree_at_shortcut_root(&tc))
+                    return exit_to_new_screen(GO_TO_ROOT);
+#endif
                 if (*tc.dirfilter > NUM_FILTER_MODES && tc.dirlevel < 1) {
                     exit_func = true;
                     break;

@@ -2604,7 +2604,11 @@ const struct settings_list settings[] = {
     "auto,headphone,lineout", hp_lo_select_apply, 3,
     ID2P(LANG_AUTO), ID2P(LANG_HEADPHONE), ID2P(LANG_LINEOUT)),
 #endif
+#ifdef HAVE_EMEPETRES_HOME
+    OFFON_SETTING(0, playback_log, LANG_LOGGING, true, "play log", NULL),
+#else
     OFFON_SETTING(0, playback_log, LANG_LOGGING, false, "play log", NULL),
+#endif
 #if defined(HAVE_GENERAL_PURPOSE_LED)
     OFFON_SETTING(0, use_led_indicators, LANG_USE_LED_INDICATORS, false, "LED indicators", NULL),
 #endif

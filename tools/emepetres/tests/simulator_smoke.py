@@ -27,7 +27,7 @@ with tempfile.TemporaryDirectory(prefix='emepetres-simulator-') as tmp:
     music.mkdir()
     for artist in range(1, 4):
         subprocess.run(['ffmpeg', '-v', 'error', '-f', 'lavfi', '-i',
-                        'sine=frequency=440:duration=5', '-metadata',
+                        'sine=frequency=440:duration=31', '-metadata',
                         f'artist=Test Artist {artist}', '-metadata',
                         'album=Test Album', '-metadata', 'title=Test Track',
                         '-metadata', 'track=1', str(music / f'artist-{artist}.flac')], check=True)
@@ -72,8 +72,14 @@ with tempfile.TemporaryDirectory(prefix='emepetres-simulator-') as tmp:
                             '-i', os.environ['DISPLAY'] + '+' + geometry['X'] + ',' + geometry['Y'],
                             '-frames:v', '1', str(results / f'{name}.png')], check=True)
 
+        def home():
+            subprocess.run(['xdotool', 'keydown', 'equal', 'minus'], check=True)
+            time.sleep(0.15)
+            subprocess.run(['xdotool', 'keyup', 'equal', 'minus'], check=True)
+            time.sleep(0.6)
+
         capture('01-home')
-        key('Return')  # Database is first in the Rocker default Home.
+        key('Return')  # Artists opens directly from emepetres Home.
         time.sleep(1.5)
         capture('02-library-or-initialize')
         key('Return')  # Accept database initialization in this disposable root.
@@ -89,11 +95,49 @@ with tempfile.TemporaryDirectory(prefix='emepetres-simulator-') as tmp:
         stop(proc)
         proc, geometry = launch()
         key('Return')
-        capture('03-library-after-restart')
+        capture('03-artists-direct')
+        key('Down'); key('Down')  # Skip All Tracks and Random; choose Artist 1.
+        capture('04-selected-artist')
         key('Return')
-        capture('04-artists')
+        capture('05-artist-albums')
+        key('Down'); key('Down'); key('Down')  # Actual album after three shortcuts.
+        key('Return')
+        capture('06-album-tracks')
+        key('Left')
+        capture('07-back-preserved-album')
+        key('Return')
+        key('Return')  # Play the selected synthetic 31-second FLAC.
+        capture('08-playback')
+        time.sleep(16)
+        subprocess.run(['xdotool', 'keydown', 'Return'], check=True)
+        time.sleep(0.9)  # Long Select = Stop, retaining its original playback binding.
+        subprocess.run(['xdotool', 'keyup', 'Return'], check=True)
+        time.sleep(1)
+        home()  # Stop returns to the previous library; the chord opens Home.
+        capture('09-home-after-playback')
+        key('Down'); key('Down'); key('Down')  # Artists -> Albums -> Search -> Last.fm.
+        key('Return')
+        capture('10-lastfm')
+        key('Return')  # Prepare synchronization, preserving raw source logs.
+        time.sleep(6)
+        capture('11-lastfm-export')
+        raw = sandbox / '.rockbox/emepetres_playback.log'
+        exported = sandbox / '.emepetres-scrobbler.log'
+        assert raw.is_file(), 'offline listening record missing'
+        assert exported.is_file(), 'Last.fm export missing'
+        lines = exported.read_text(encoding='utf-8-sig').splitlines()
+        played = [line.split('\t') for line in lines if line and not line.startswith('#')]
+        assert any(len(fields) >= 7 and fields[5] == 'L' and fields[0] == 'Test Artist 1'
+                   and fields[2] == 'Test Track' and int(fields[6]) > 0 for fields in played), 'qualified synthetic scrobble missing'
+        (results / 'synthetic-scrobbler.log').write_bytes(exported.read_bytes())
+        previous_export = exported.read_bytes()
+        previous_raw = raw.read_bytes()
+        key('Return')  # Repeat export: snapshot is regenerated, not appended again.
+        time.sleep(6)
+        assert exported.read_bytes() == previous_export, 'repeated export duplicated retained history'
+        assert raw.read_bytes() == previous_raw, 'export changed the raw listening record'
         assert proc.poll() is None, 'simulator exited while browsing initialized database'
-        print(f'{build.name}: package, startup, database initialization and reopening passed')
+        print(f'{build.name}: direct Artists/Albums/Tracks, Back, playback and offline Last.fm export passed')
     finally:
         stop(proc)
         log.close()

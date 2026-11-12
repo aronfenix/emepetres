@@ -117,6 +117,20 @@ static size_t chunk_widx;
 
 static size_t pcmbuf_bytes_waiting;
 static struct chunkdesc *current_desc;
+#ifdef HAVE_EMEPETRES_HOME
+static uint64_t emepetres_played_usec;
+static uint64_t emepetres_chunk_usec;
+
+uint64_t pcmbuf_get_played_usec(void)
+{
+    /* PCM completion may run in another thread/IRQ; read the 64-bit counter
+     * under its existing lock, including on the 32-bit native target. */
+    pcm_play_lock();
+    uint64_t usec = emepetres_played_usec;
+    pcm_play_unlock();
+    return usec;
+}
+#endif
 static size_t chunk_transidx;
 
 static size_t pcmbuf_watermark = 0;
@@ -801,6 +815,11 @@ static void pcmbuf_pcm_callback(const void **start, size_t *size)
 
     if (desc)
     {
+#ifdef HAVE_EMEPETRES_HOME
+        /* Only completed output chunks count. Discarded seek/rebuffer chunks,
+         * pauses, silence during underruns and stopped playback add nothing. */
+        emepetres_played_usec += emepetres_chunk_usec;
+#endif
         bool track_change = index == chunk_transidx;
 
         /* If last chunk in the track, notify of track change */
@@ -828,6 +847,9 @@ static void pcmbuf_pcm_callback(const void **start, size_t *size)
 
         *start = index_buffer(index);
         *size = desc->size;
+#ifdef HAVE_EMEPETRES_HOME
+        emepetres_chunk_usec = (uint64_t)desc->size * 1000000 / BYTERATE;
+#endif
 
         if (desc->pos_key != 0)
         {

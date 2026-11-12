@@ -14,7 +14,7 @@ jobs:
       - name: Install build dependencies on the runner
         run: sudo apt-get update && sudo apt-get install -y build-essential libsdl2-dev libasound2-dev zip perl xvfb xdotool ffmpeg
       - name: Navigation regression tests
-        run: python3 tools/emepetres/tests/test_navigation.py
+        run: python3 -m unittest discover -s tools/emepetres/tests -p 'test_*.py' -v
       - name: Build both simulators
         run: |
           for target in agptekrocker agptekrockernative; do
@@ -39,3 +39,31 @@ jobs:
             build-agptekrockernative/rockboxui
             build-agptekrockernative/rockbox.zip
             build-*/smoke-results/
+  lastfm-windows:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    env:
+      PYTHONPATH: tools/emepetres
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Offline sync, Windows protection and interface tests
+        run: python -m unittest discover -s tools/emepetres/lastfm/tests -v
+      - name: Build standalone Windows application
+        run: |
+          python -m pip install pyinstaller==6.17.0
+          python -m PyInstaller --noconfirm --clean --onefile --windowed --name emepetres-lastfm --paths tools/emepetres tools/emepetres/lastfm/launcher.py
+      - name: Launch packaged application without network or account data
+        shell: pwsh
+        run: |
+          $smokeData = Join-Path $env:RUNNER_TEMP 'emepetres-smoke'
+          $smokeProcess = Start-Process -FilePath (Resolve-Path 'dist/emepetres-lastfm.exe') -ArgumentList @('--data-dir', $smokeData, '--smoke') -WindowStyle Hidden -PassThru -Wait
+          if ($smokeProcess.ExitCode -ne 0) { throw 'Packaged application smoke failed' }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: emepetres-LastFM-Windows
+          path: |
+            dist/emepetres-lastfm.exe
+            docs/EMEPETRES_LASTFM.md

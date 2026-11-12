@@ -20,6 +20,10 @@
  *
  ****************************************************************************/
 #include "config.h"
+#ifdef HAVE_EMEPETRES_HOME
+#include "emepetres_play_clock.h"
+static struct emepetres_play_clock emepetres_listening;
+#endif
 #include "system.h"
 #include "version.h"
 #include "kernel.h"
@@ -360,7 +364,12 @@ static int  codec_skip_status;
 static bool codec_seeking = false;          /* Codec seeking ack expected? */
 static unsigned int position_key = 0;
 
-#define PLAYBACK_LOG_PATH ROCKBOX_DIR "/playback.log"
+#ifdef HAVE_EMEPETRES_HOME
+#define PLAYBACK_LOG_PREFIX "emepetres_playback"
+#else
+#define PLAYBACK_LOG_PREFIX "playback"
+#endif
+#define PLAYBACK_LOG_PATH ROCKBOX_DIR "/" PLAYBACK_LOG_PREFIX ".log"
 #define PLAYBACK_LOG_MAX_FILESZ_BYTES (511 << 10) /* 512k approx 1000-2500 tracks */
 #define PLAYBACK_LOG_MIN_ELAPSED_MS   (500) /* 500 milliseconds */
 #if (CONFIG_STORAGE & STORAGE_ATA)
@@ -1275,7 +1284,7 @@ void allocate_playback_log(void)
             if (lseek(fd, 0, SEEK_END) > PLAYBACK_LOG_MAX_FILESZ_BYTES)
             {
                 close(fd);
-                create_numbered_filename(filename, ROCKBOX_DIR, "playback_",
+                create_numbered_filename(filename, ROCKBOX_DIR, PLAYBACK_LOG_PREFIX "_",
                                          ".log", 4 IF_CNFN_NUM_(, NULL));
                 DEBUGF("Renaming %s => %s\n", PLAYBACK_LOG_PATH, filename);
                 if (rename(PLAYBACK_LOG_PATH, filename) < 0)
@@ -1302,6 +1311,12 @@ void add_playbacklog(struct mp3entry *id3)
     if (!global_settings.playback_log)
         return;
     unsigned long timestamp = 0;
+    unsigned long listened_ms = id3 ? id3->elapsed : 0;
+#ifdef HAVE_EMEPETRES_HOME
+    if (id3)
+        listened_ms = MIN(id3->length,
+                         emepetres_clock_elapsed_ms(&emepetres_listening, pcmbuf_get_played_usec()));
+#endif
     ssize_t used = 0;
 #if (CONFIG_STORAGE & STORAGE_ATA)
     ssize_t bufsz = 0;
@@ -1321,9 +1336,11 @@ void add_playbacklog(struct mp3entry *id3)
         DEBUGF("%s Used %lu Remain: %lu\n", __func__, used, bufsz);
     }
 #endif
-    if (id3 && id3->elapsed > PLAYBACK_LOG_MIN_ELAPSED_MS)
+    if (id3 && listened_ms > PLAYBACK_LOG_MIN_ELAPSED_MS)
     {
-#if     CONFIG_RTC
+#if defined(HAVE_EMEPETRES_HOME)
+        timestamp = emepetres_listening.timestamp;
+#elif CONFIG_RTC
         timestamp = mktime(get_time());
 #else
         timestamp = current_tick * (1000 / HZ); /* milliseconds */
@@ -1333,12 +1350,12 @@ void add_playbacklog(struct mp3entry *id3)
         {
             /*10:10:10:MAX_PATH\n*/
             ssize_t entrylen = snprintf(buf, bufsz,"%lu:%ld:%ld:%s\n",
-                    timestamp, (long)id3->elapsed, (long)id3->length, id3->path);
+                    timestamp, (long)listened_ms, (long)id3->length, id3->path);
 
             if (entrylen < bufsz)
             {
                 DEBUGF("BUFFERED: time: %lu elapsed %ld/%ld saving file: %s\n",
-                    timestamp, (long)id3->elapsed, (long)id3->length, id3->path);
+                    timestamp, (long)listened_ms, (long)id3->length, id3->path);
                 return; /* succeed or snprintf fail return */
             }
             buf[0] = '\0';
@@ -1371,9 +1388,9 @@ void add_playbacklog(struct mp3entry *id3)
         {
             /* we have the timestamp from when we tried to add to buffer */
             DEBUGF("LOGGED: time: %lu elapsed %ld/%ld saving file: %s\n",
-                    timestamp, (long)id3->elapsed, (long)id3->length, id3->path);
+                    timestamp, (long)listened_ms, (long)id3->length, id3->path);
             fdprintf(fd, "%lu:%ld:%ld:%s\n",
-                    timestamp, (long)id3->elapsed, (long)id3->length, id3->path);
+                    timestamp, (long)listened_ms, (long)id3->length, id3->path);
         }
 
         close(fd);
@@ -1413,6 +1430,14 @@ static void audio_playlist_track_change(void)
 
     if (id3)
     {
+#ifdef HAVE_EMEPETRES_HOME
+        emepetres_clock_start(&emepetres_listening, pcmbuf_get_played_usec(),
+#if CONFIG_RTC
+                              mktime(get_time()));
+#else
+                              0);
+#endif
+#endif
         send_track_event(PLAYBACK_EVENT_TRACK_CHANGE,
                          track_event_flags, id3);
         iap_on_track_playback_index(playlist_get_display_index() - 1, false);

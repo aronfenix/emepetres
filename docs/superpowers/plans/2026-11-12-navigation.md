@@ -36,3 +36,14 @@ if the two keys are pressed at different times. Keyboard, plugins and modal
 dialogs keep their own mappings; universal Home there is not claimed.
 
 Progress and verification are recorded in docs/EMEPETRES_NAVIGATION.md.
+
+## Scope expansion requested by user
+
+The user explicitly requested much bolder changes and fewer repeated builds.
+Implement a real emepetres Home: Artists, Albums, Search, Shuffle, playback,
+Settings, and an advanced System submenu. Open database routes directly, retain
+an independent in-memory browsing position for Artists/Albums/Search, return
+straight to Home from each route's top level, and retain standard audio behavior.
+Search includes first-letter browsing. Existing custom database configs fall back
+to their own menu when the reserved route IDs are absent. Run one grouped build
+and scripted UI journey for the expanded implementation.

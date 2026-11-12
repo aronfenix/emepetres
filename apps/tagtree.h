@@ -38,6 +38,14 @@ int tagtree_enter(struct tree_context* c, bool is_visible);
 void tagtree_exit(struct tree_context* c, bool is_visible);
 void tagtree_save_scroll(struct tree_context *c, int first_item);
 int tagtree_get_scroll(struct tree_context *c);
+#ifdef HAVE_EMEPETRES_HOME
+enum tagtree_shortcut {
+    TAGTREE_DATABASE, TAGTREE_ARTISTS, TAGTREE_ALBUMS, TAGTREE_SEARCH,
+    TAGTREE_SHUFFLE, TAGTREE_SHORTCUT_COUNT
+};
+bool tagtree_open_shortcut(struct tree_context *c, enum tagtree_shortcut shortcut);
+bool tagtree_at_shortcut_root(struct tree_context *c);
+#endif
 int tagtree_load(struct tree_context* c);
 char* tagtree_get_entry_name(struct tree_context *c, int id,
                                     char* buf, size_t bufsize);

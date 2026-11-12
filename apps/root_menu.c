@@ -125,6 +125,10 @@ static int browser(void* param)
 #ifdef HAVE_TAGCACHE
     static int last_db_dirlevel = 0, last_db_selection = 0, last_ft_dirlevel = 0;
 #endif
+#ifdef HAVE_EMEPETRES_HOME
+    enum tagtree_shortcut shortcut = TAGTREE_DATABASE;
+    bool run_shuffle = false;
+#endif
 
     switch ((intptr_t)param)
     {
@@ -173,6 +177,17 @@ static int browser(void* param)
             push_current_activity(ACTIVITY_FILEBROWSER);
         break;
 #ifdef HAVE_TAGCACHE
+#ifdef HAVE_EMEPETRES_HOME
+        case GO_TO_ARTISTS:
+        case GO_TO_ALBUMS:
+        case GO_TO_SEARCH:
+        case GO_TO_SHUFFLE:
+            if ((intptr_t)param == GO_TO_ARTISTS) shortcut = TAGTREE_ARTISTS;
+            if ((intptr_t)param == GO_TO_ALBUMS) shortcut = TAGTREE_ALBUMS;
+            if ((intptr_t)param == GO_TO_SEARCH) shortcut = TAGTREE_SEARCH;
+            if ((intptr_t)param == GO_TO_SHUFFLE) shortcut = TAGTREE_SHUFFLE;
+            /* fall through */
+#endif
         case GO_TO_DBBROWSER:
             if (!tagcache_is_usable())
             {
@@ -280,6 +295,9 @@ static int browser(void* param)
             last_ft_dirlevel = tc->dirlevel;
             tc->dirlevel = last_db_dirlevel;
             tc->selected_item = last_db_selection;
+#ifdef HAVE_EMEPETRES_HOME
+            run_shuffle = tagtree_open_shortcut(tc, shortcut) && shortcut == TAGTREE_SHUFFLE;
+#endif
             push_current_activity(ACTIVITY_DATABASEBROWSER);
         break;
 #endif /*HAVE_TAGCACHE*/
@@ -287,6 +305,9 @@ static int browser(void* param)
 
     struct browse_context browse = {
         .dirfilter = filter,
+#ifdef HAVE_EMEPETRES_HOME
+        .flags = run_shuffle ? BROWSE_SHUFFLE : 0,
+#endif
         .icon = Icon_NOICON,
         .root = folder,
     };
@@ -312,6 +333,12 @@ static int browser(void* param)
             }
         break;
 #ifdef HAVE_TAGCACHE
+#ifdef HAVE_EMEPETRES_HOME
+        case GO_TO_ARTISTS:
+        case GO_TO_ALBUMS:
+        case GO_TO_SEARCH:
+        case GO_TO_SHUFFLE:
+#endif
         case GO_TO_DBBROWSER:
             last_db_dirlevel = tc->dirlevel;
             last_db_selection = tc->selected_item;
@@ -476,6 +503,12 @@ static const struct root_items items[] = {
 #ifdef HAVE_TAGCACHE
     [GO_TO_DBBROWSER] =     { browser, (void*)GO_TO_DBBROWSER, &tagcache_menu },
 #endif
+#ifdef HAVE_EMEPETRES_HOME
+    [GO_TO_ARTISTS] =       { browser, (void*)GO_TO_ARTISTS, &tagcache_menu },
+    [GO_TO_ALBUMS] =        { browser, (void*)GO_TO_ALBUMS, &tagcache_menu },
+    [GO_TO_SEARCH] =        { browser, (void*)GO_TO_SEARCH, &tagcache_menu },
+    [GO_TO_SHUFFLE] =       { browser, (void*)GO_TO_SHUFFLE, &tagcache_menu },
+#endif
     [GO_TO_WPS] =           { wpsscrn, NULL, &playback_settings },
     [GO_TO_MAINMENU] =      { miscscrn, (struct menu_item_ex*)&main_menu_,
                                                             &manage_settings },
@@ -543,12 +576,63 @@ MENUITEM_RETURNVALUE(playlists, ID2P(LANG_PLAYLISTS), GO_TO_PLAYLISTS_SCREEN,
 MENUITEM_RETURNVALUE(system_menu_, ID2P(LANG_SYSTEM), GO_TO_SYSTEM_SCREEN,
                      NULL, Icon_System_menu);
 
+#ifdef HAVE_EMEPETRES_HOME
+static int emepetres_export_lastfm(void)
+{
+    if (!global_settings.playback_log)
+    {
+        global_settings.playback_log = true;
+        settings_save();
+    }
+    int ret = plugin_load(PLUGIN_APPS_DIR "/lastfm_scrobbler.rock", "-emepetres-export");
+    return ret == PLUGIN_USB_CONNECTED ? MENU_ATTACHED_USB : 0;
+}
+
+static int emepetres_view_lastfm(void)
+{
+    int ret = plugin_load(VIEWERS_DIR "/lastfm_scrobbler_viewer.rock",
+                          HOME_DIR "/.emepetres-scrobbler.log");
+    return ret == PLUGIN_USB_CONNECTED ? MENU_ATTACHED_USB : 0;
+}
+MENUITEM_FUNCTION(lastfm_export_item, MENU_FUNC_CHECK_RETVAL,
+                  "Preparar sincronizacion", emepetres_export_lastfm, NULL, Icon_Audio);
+MENUITEM_FUNCTION(lastfm_view_item, MENU_FUNC_CHECK_RETVAL,
+                  "Ver escuchas", emepetres_view_lastfm, NULL, Icon_Audio);
+MENUITEM_SETTING_W_TEXT(lastfm_logging_item, &global_settings.playback_log,
+                        "Registrar escuchas", NULL);
+MAKE_MENU(lastfm_menu, "Last.fm", NULL, Icon_Audio,
+          &lastfm_export_item, &lastfm_view_item, &lastfm_logging_item);
+MENUITEM_RETURNVALUE(artists_browser, ID2P(LANG_ARTISTS), GO_TO_ARTISTS,
+                     NULL, Icon_Audio);
+MENUITEM_RETURNVALUE(albums_browser, ID2P(LANG_ALBUMS), GO_TO_ALBUMS,
+                     NULL, Icon_Audio);
+MENUITEM_RETURNVALUE(search_browser, ID2P(LANG_SEARCH), GO_TO_SEARCH,
+                     NULL, Icon_Questionmark);
+MENUITEM_RETURNVALUE(shuffle_browser, ID2P(LANG_SHUFFLE_SONGS), GO_TO_SHUFFLE,
+                     NULL, Icon_Audio);
+MAKE_MENU(emepetres_more, ID2P(LANG_SYSTEM), NULL, Icon_System_menu,
+          &file_browser, &db_browser, &playlists, &bookmarks, &rocks_browser,
+          &system_menu_, &shortcut_menu);
+#endif
+
 struct menu_item_ex root_menu_;
 static struct menu_callback_with_desc root_menu_desc = {
+#ifdef HAVE_EMEPETRES_HOME
+        item_callback, (unsigned char *)"emepetres", Icon_Audio };
+#else
         item_callback, ID2P(LANG_ROCKBOX_TITLE), Icon_Rockbox };
+#endif
 
 static struct menu_table menu_table[] = {
     /* Order here represents the default ordering */
+#ifdef HAVE_EMEPETRES_HOME
+    { "artists", &artists_browser },
+    { "albums", &albums_browser },
+    { "search", &search_browser },
+    { "lastfm", &lastfm_menu },
+    { "shuffle", &shuffle_browser },
+    { "advanced", &emepetres_more },
+#endif
 #if defined(HAVE_TAGCACHE) && CONFIG_KEYPAD == AGPTEK_ROCKER_PAD
     { "database", &db_browser },
 #endif
@@ -653,11 +737,24 @@ void root_menu_set_default(void* setting, void* defaultval)
     root_menu_.submenus = (const struct menu_item_ex **)&root_menu__;
     root_menu_.callback_and_desc = &root_menu_desc;
 
-    for (i=0; i<MAX_MENU_ITEMS; i++)
+#ifdef HAVE_EMEPETRES_HOME
+    const struct menu_item_ex *defaults[] = {
+        &artists_browser, &albums_browser, &search_browser, &lastfm_menu, &shuffle_browser,
+        &wps_item, &menu_, &emepetres_more
+    };
+    const unsigned int default_count = ARRAYLEN(defaults);
+#else
+    const unsigned int default_count = MAX_MENU_ITEMS;
+#endif
+    for (i=0; i<default_count; i++)
     {
+#ifdef HAVE_EMEPETRES_HOME
+        root_menu__[i] = (struct menu_item_ex *)defaults[i];
+#else
         root_menu__[i] = (struct menu_item_ex *)menu_table[i].item;
+#endif
     }
-    root_menu_.flags |= MENU_ITEM_COUNT(MAX_MENU_ITEMS);
+    root_menu_.flags |= MENU_ITEM_COUNT(default_count);
     *(bool*)setting = false;
 }
 
@@ -698,7 +795,7 @@ static int item_callback(int action,
 static int get_selection(int last_screen)
 {
     int i;
-    int len = ARRAYLEN(root_menu__);
+    int len = MENU_GET_COUNT(root_menu_.flags);
     for(i=0; i < len; i++)
     {
         if (((root_menu__[i]->flags&MENU_TYPE_MASK) == MT_RETURN_VALUE) &&
@@ -867,6 +964,11 @@ static int root_menu_setup_screens(void)
     if (new_screen >= NUM_ITEMS ||
         (new_screen == GO_TO_WPS && global_status.resume_index == -1))
         new_screen = GO_TO_ROOT;
+#ifdef HAVE_EMEPETRES_HOME
+    /* Shuffle is an explicit command, never an automatic restart action. */
+    if (new_screen == GO_TO_SHUFFLE)
+        new_screen = GO_TO_ROOT;
+#endif
     else if (new_screen == GO_TO_PLUGIN)
     {
         if (global_status.last_screen == GO_TO_SHORTCUTMENU)
@@ -975,11 +1077,23 @@ void root_menu(void)
 #ifdef HAVE_TAGCACHE
             case GO_TO_DBBROWSER:
 #endif
+#ifdef HAVE_EMEPETRES_HOME
+            case GO_TO_ARTISTS:
+            case GO_TO_ALBUMS:
+            case GO_TO_SEARCH:
+#endif
             case GO_TO_FILEBROWSER:
             case GO_TO_PLAYLISTS_SCREEN:
                 global_status.last_browser = previous_browser = next_screen;
                 goto load_next_screen;
                 break;
+#ifdef HAVE_EMEPETRES_HOME
+            case GO_TO_SHUFFLE:
+                /* Returning from playback opens Artists; it must not replay
+                 * the Shuffle command and replace the playlist a second time. */
+                global_status.last_browser = previous_browser = GO_TO_ARTISTS;
+                goto load_next_screen;
+#endif
 #if CONFIG_TUNER
             case GO_TO_WPS:
             case GO_TO_FM:

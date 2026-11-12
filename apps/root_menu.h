@@ -63,7 +63,13 @@ enum {
     GO_TO_PLAYLISTS_SCREEN,
     GO_TO_PLAYLIST_VIEWER,
     GO_TO_SYSTEM_SCREEN,
-    GO_TO_SHORTCUTMENU
+    GO_TO_SHORTCUTMENU,
+#ifdef HAVE_EMEPETRES_HOME
+    GO_TO_ARTISTS,
+    GO_TO_ALBUMS,
+    GO_TO_SEARCH,
+    GO_TO_SHUFFLE,
+#endif
 };
 #ifndef PLUGIN
 extern struct menu_item_ex root_menu_;
