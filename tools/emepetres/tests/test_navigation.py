@@ -46,7 +46,7 @@ class Navigation(unittest.TestCase):
         keymap = (ROOT / 'apps/keymaps/keymap-agptekrocker.c').read_text()
         worker = function((ROOT / 'apps/action.c').read_text(),
                           'static inline int action_code_worker(')
-        tokens = sorted(set(re.findall(r'\b(?:ACTION|CONTEXT)_\w+', keymap + worker))
+        tokens = sorted(set(re.findall(r'\b(?:ACTION|CONTEXT)_\w+', keymap + worker + ' ACTION_NONE'))
                         - {'CONTEXT_LOCKED', 'CONTEXT_STOPSEARCHING'})
         constants = 'enum { ' + ', '.join(tokens) + ' };\n'
         constants += '#define CONTEXT_LOCKED 0x4000000\n#define CONTEXT_STOPSEARCHING -1\n'
@@ -115,7 +115,8 @@ int main(void) {
     def test_database_scroll_history(self):
         source = (ROOT / 'apps/tagtree.c').read_text()
         # Missing functions is an explicit failure before this feature exists.
-        self.assertIn('void tagtree_save_scroll(', source)
+        self.assertTrue('void tagtree_save_scroll(' in source,
+                        'database viewport history is not implemented')
         save = function(source, 'void tagtree_save_scroll(')
         restore = function(source, 'int tagtree_get_scroll(')
         leave = function(source, 'void tagtree_exit(')
