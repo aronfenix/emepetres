@@ -92,7 +92,7 @@ int main(void) {
         assert(resolve(c, BUTTON_LEFT|BUTTON_REL, BUTTON_LEFT|BUTTON_REPEAT) == ACTION_UNKNOWN);
         assert(resolve(c, BTN_VOL_COMBO|BUTTON_REL, BTN_VOL_COMBO) == ACTION_STD_MENU);
     }
-    assert(resolve(CONTEXT_MAINMENU, BTN_VOL_COMBO|BUTTON_REL, BTN_VOL_COMBO) == ACTION_NONE);
+    assert(resolve(CONTEXT_MAINMENU, BTN_VOL_COMBO|BUTTON_REL, BTN_VOL_COMBO) == ACTION_STD_MENU);
     assert(resolve(CONTEXT_WPS, BTN_VOL_COMBO|BUTTON_REL, BTN_VOL_COMBO) == ACTION_WPS_MENU);
     assert(resolve(CONTEXT_WPS, BUTTON_POWER, BUTTON_NONE) == ACTION_STD_KEYLOCK);
     assert(resolve(CONTEXT_WPS, BUTTON_SELECT|BUTTON_REL, BUTTON_SELECT) == ACTION_WPS_PLAY);
@@ -111,6 +111,29 @@ int main(void) {
 }
 '''
         self.compile_run(keymap + harness + worker + resolver, headers)
+
+    def test_home_in_root_and_settings_menus(self):
+        source = (ROOT / 'apps/menu.c').read_text()
+        handler = function(source, 'if (action == ACTION_STD_MENU)')
+        self.compile_run('''
+#include <assert.h>
+#include <stdbool.h>
+#define CONFIG_KEYPAD 42
+#define AGPTEK_ROCKER_PAD 42
+enum { ACTION_STD_MENU, GO_TO_ROOT, GO_TO_PREVIOUS };
+static int root_menu_, settings_menu;
+static int home(int *menu) {
+    int action = ACTION_STD_MENU, ret = -1;
+    bool done = false;
+''' + handler + '''
+    assert(done); return ret;
+}
+int main(void) {
+    assert(home(&root_menu_) == GO_TO_ROOT);
+    assert(home(&settings_menu) == GO_TO_ROOT);
+    return 0;
+}
+''')
 
     def test_database_scroll_history(self):
         source = (ROOT / 'apps/tagtree.c').read_text()
