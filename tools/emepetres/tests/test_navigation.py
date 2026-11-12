@@ -28,6 +28,27 @@ def function(source, signature):
 
 
 class Navigation(unittest.TestCase):
+    def test_packaged_library_for_make_and_install_modelnames(self):
+        perl = shutil.which('perl')
+        if not perl and Path('C:/Program Files/Git/usr/bin/perl.exe').exists():
+            perl = 'C:/Program Files/Git/usr/bin/perl.exe'
+        if not perl:
+            self.skipTest('Perl required; GitHub Actions runs this test')
+        source = (ROOT / 'tools/buildzip.pl').read_text()
+        start = source.index('    # Keep other targets and existing tagnavi_user.config')
+        end = source.index('\n', source.index('copy($tagnavi,', start))
+        packaging = source[start:end]
+        for model in ('agptekrocker', 'agptekrockernative', '"agptekrocker"',
+                      '"agptekrockernative"', 'sansaclipplus', '"sansaclipplus"'):
+            with self.subTest(model=model), tempfile.TemporaryDirectory() as tmp:
+                script = 'use strict; use warnings; use File::Copy;\n'
+                script += 'my ($ROOT, $temp_dir) = @ARGV;\nmy $modelname = $ENV{EMEPETRES_TEST_MODEL};\n' + packaging
+                subprocess.run([perl, '-e', script, str(ROOT), tmp], check=True,
+                               env=dict(os.environ, EMEPETRES_TEST_MODEL=model))
+                expected = 'tagnavi-emepetres.config' if 'agptekrocker' in model else 'tagnavi.config'
+                self.assertEqual((Path(tmp) / 'tagnavi.config').read_bytes(),
+                                 (ROOT / 'apps' / expected).read_bytes())
+
     def compile_run(self, source, headers=None):
         compiler = shutil.which(os.environ.get('CC', 'cc'))
         if not compiler:
