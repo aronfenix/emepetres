@@ -6,7 +6,6 @@ It verifies startup/package integration and records the first library screens.
 """
 import os
 from pathlib import Path
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -23,7 +22,7 @@ with tempfile.TemporaryDirectory(prefix='emepetres-simulator-') as tmp:
     expected = Path('apps/tagnavi-emepetres.config').read_bytes()
     assert (sandbox / '.rockbox/tagnavi.config').read_bytes() == expected
     (sandbox / '.rockbox/config.cfg').write_text(
-        'start in screen: root\nbacklight timeout: off\n', encoding='utf-8')
+        'start in screen: root\nbacklight timeout: 0\n', encoding='utf-8')
     music = sandbox / 'Synthetic music'
     music.mkdir()
     for artist in range(1, 4):
@@ -44,26 +43,38 @@ with tempfile.TemporaryDirectory(prefix='emepetres-simulator-') as tmp:
             ['xdotool', 'search', '--sync', '--pid', str(proc.pid)], timeout=10,
             text=True).splitlines()[0]
         subprocess.run(['xdotool', 'windowfocus', '--sync', window], check=True)
+        geometry = dict(line.split('=', 1) for line in subprocess.check_output(
+            ['xdotool', 'getwindowgeometry', '--shell', window], text=True).splitlines())
 
         def key(name):
-            subprocess.run(['xdotool', 'key', '--clearmodifiers', name], check=True)
-            time.sleep(0.4)
+            # Rockbox samples and debounces button state twice; xdotool's
+            # default 12 ms tap is too short to guarantee either sample.
+            subprocess.run(['xdotool', 'keydown', name], check=True)
+            time.sleep(0.15)
+            subprocess.run(['xdotool', 'keyup', name], check=True)
+            time.sleep(0.6)
 
         def capture(name):
-            # Native simulators expose F5; hosted/application builds may not.
-            before = set(sandbox.glob('*.bmp'))
-            key('F5')
-            for path in set(sandbox.glob('*.bmp')) - before:
-                shutil.copyfile(path, results / f'{name}.bmp')
+            subprocess.run(['ffmpeg', '-v', 'error', '-f', 'x11grab',
+                            '-video_size', geometry['WIDTH'] + 'x' + geometry['HEIGHT'],
+                            '-i', os.environ['DISPLAY'] + '+' + geometry['X'] + ',' + geometry['Y'],
+                            '-frames:v', '1', str(results / f'{name}.png')], check=True)
 
         capture('01-home')
         key('Return')  # Database is first in the Rocker default Home.
+        time.sleep(1.5)
         capture('02-library-or-initialize')
         key('Return')  # Accept database initialization in this disposable root.
-        time.sleep(8)
+        for _ in range(30):
+            if list((sandbox / '.rockbox').glob('database_*.tcd')):
+                break
+            time.sleep(0.5)
+        time.sleep(2)
         capture('03-library-after-initialize')
         assert proc.poll() is None, 'simulator exited while opening the database'
         assert list((sandbox / '.rockbox').glob('database_*.tcd')), 'database was not initialized'
+        key('Return')
+        capture('04-artists')
         print(f'{build.name}: package, startup and synthetic database initialization passed')
     finally:
         proc.terminate()
@@ -73,3 +84,4 @@ with tempfile.TemporaryDirectory(prefix='emepetres-simulator-') as tmp:
             proc.kill()
             proc.wait()
         log.close()
+        print((results / 'startup.log').read_text(errors='replace')[-4000:])
