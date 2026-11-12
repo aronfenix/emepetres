@@ -1,0 +1,35 @@
+name: emepetres navigation
+on:
+  push:
+    branches: [emepetres/dev]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  navigation:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build dependencies on the runner
+        run: sudo apt-get update && sudo apt-get install -y build-essential libsdl2-dev libasound2-dev zip perl
+      - name: Navigation regression tests
+        run: python3 tools/emepetres/tests/test_navigation.py
+      - name: Build both simulators
+        run: |
+          for target in agptekrocker agptekrockernative; do
+            mkdir "build-$target"
+            cd "build-$target"
+            ../tools/configure --target="$target" --type=s
+            make -j2
+            make zip
+            cd ..
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: emepetres-linux-simulators-NOT-FIRMWARE
+          path: |
+            build-agptekrocker/rockboxui
+            build-agptekrocker/rockbox.zip
+            build-agptekrockernative/rockboxui
+            build-agptekrockernative/rockbox.zip
