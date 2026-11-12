@@ -109,7 +109,9 @@ python -m unittest discover -s tools/emepetres/lastfm/tests -v
 
 Las pruebas usan registros ficticios y transportes sustituidos: formatos, deduplicación, reimportaciones, cuentas, firmas, lotes, aceptación parcial, fallos de respuesta, interrupciones, bloqueos y almacenamiento DPAPI. La prueba de DPAPI utiliza exclusivamente cadenas de prueba y se omite fuera de Windows. No hacen llamadas a Last.fm ni acceden a música, tarjetas o dispositivos reales.
 
-El empaquetado del ejecutable se realiza en CI; PyInstaller no es necesario para ejecutar el código fuente y no se instala automáticamente en tu equipo. Un resultado correcto de pruebas locales no sustituye a comprobar la compilación publicada ni a la futura prueba autorizada con una cuenta real.
+El empaquetado del ejecutable se realiza en CI; PyInstaller no es necesario para ejecutar el código fuente y no se instala automáticamente en tu equipo. Un resultado correcto de pruebas locales no sustituye a comprobar la compilación publicada ni a una prueba autorizada de envío real.
+
+El 12 de noviembre de 2026 se completó la autorización real en Windows: el usuario creó su aplicación personal y realizó la autorización del navegador. Se verificó en la interfaz «Autorizada en este equipo», con cero escuchas enviadas. Las pruebas automatizadas siguen usando únicamente datos ficticios y no necesitan estas credenciales. El envío real con una escucha auténtica y la comprobación física del reproductor siguen pendientes.
 
 ## Referencias de protocolo
 
