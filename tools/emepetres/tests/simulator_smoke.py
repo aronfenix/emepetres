@@ -33,10 +33,10 @@ with tempfile.TemporaryDirectory(prefix='emepetres-simulator-') as tmp:
                         '-metadata', 'track=1', str(music / f'artist-{artist}.flac')], check=True)
     env = dict(os.environ, SDL_AUDIODRIVER='dummy')
     log = (results / 'startup.log').open('w')
-    proc = subprocess.Popen([str(build / 'rockboxui'), '--nobackground',
-                             '--root', str(sandbox)], env=env, cwd=build,
-                            stdout=log, stderr=subprocess.STDOUT)
-    try:
+    def launch():
+        proc = subprocess.Popen([str(build / 'rockboxui'), '--nobackground',
+                                 '--root', str(sandbox)], env=env, cwd=build,
+                                stdout=log, stderr=subprocess.STDOUT)
         time.sleep(4)
         assert proc.poll() is None, 'simulator exited during startup'
         window = subprocess.check_output(
@@ -45,6 +45,18 @@ with tempfile.TemporaryDirectory(prefix='emepetres-simulator-') as tmp:
         subprocess.run(['xdotool', 'windowfocus', '--sync', window], check=True)
         geometry = dict(line.split('=', 1) for line in subprocess.check_output(
             ['xdotool', 'getwindowgeometry', '--shell', window], text=True).splitlines())
+        return proc, geometry
+
+    def stop(proc):
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+
+    proc, geometry = launch()
+    try:
 
         def key(name):
             # Rockbox samples and debounces button state twice; xdotool's
@@ -70,18 +82,19 @@ with tempfile.TemporaryDirectory(prefix='emepetres-simulator-') as tmp:
                 break
             time.sleep(0.5)
         time.sleep(2)
-        capture('03-library-after-initialize')
         assert proc.poll() is None, 'simulator exited while opening the database'
         assert list((sandbox / '.rockbox').glob('database_*.tcd')), 'database was not initialized'
+        # Rockbox requires a restart after first initialization to activate the
+        # database. Reopen the same disposable root before reviewing the menu.
+        stop(proc)
+        proc, geometry = launch()
+        key('Return')
+        capture('03-library-after-restart')
         key('Return')
         capture('04-artists')
-        print(f'{build.name}: package, startup and synthetic database initialization passed')
+        assert proc.poll() is None, 'simulator exited while browsing initialized database'
+        print(f'{build.name}: package, startup, database initialization and reopening passed')
     finally:
-        proc.terminate()
-        try:
-            proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            proc.wait()
+        stop(proc)
         log.close()
         print((results / 'startup.log').read_text(errors='replace')[-4000:])
