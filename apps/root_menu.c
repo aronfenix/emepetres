@@ -549,9 +549,12 @@ static struct menu_callback_with_desc root_menu_desc = {
 
 static struct menu_table menu_table[] = {
     /* Order here represents the default ordering */
+#if defined(HAVE_TAGCACHE) && CONFIG_KEYPAD == AGPTEK_ROCKER_PAD
+    { "database", &db_browser },
+#endif
     { "bookmarks", &bookmarks },
     { "files", &file_browser },
-#ifdef HAVE_TAGCACHE
+#if defined(HAVE_TAGCACHE) && CONFIG_KEYPAD != AGPTEK_ROCKER_PAD
     { "database", &db_browser },
 #endif
     { "wps", &wps_item },

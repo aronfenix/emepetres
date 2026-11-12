@@ -219,6 +219,8 @@ static struct tree_context *tc;
 
 static int max_history_level; /* depth of menu levels with applicable history */
 static int selected_item_history[MAX_DIR_LEVELS];
+/* Main-screen viewport follows the same lifetime as the selection history. */
+static int first_visible_item_history[MAX_DIR_LEVELS];
 static int table_history[MAX_DIR_LEVELS];
 static int extra_history[MAX_DIR_LEVELS];
 
@@ -1429,6 +1431,7 @@ static void tagtree_unload(struct tree_context *c)
 static bool initialize_tagtree(void) /* also used when user selects 'Reload' in 'custom menu'*/
 {
     max_history_level = 0;
+    memset(first_visible_item_history, 0, sizeof(first_visible_item_history));
     format_count = 0;
     menu_count = 0;
     menu = NULL;
@@ -2176,7 +2179,10 @@ int tagtree_enter(struct tree_context* c, bool is_visible)
         {
             max_history_level = c->dirlevel + 1;
             if (max_history_level < MAX_DIR_LEVELS)
+            {
                 selected_item_history[max_history_level] = 0;
+                first_visible_item_history[max_history_level] = 0;
+            }
         }
 
         selected_item_history[c->dirlevel]=c->selected_item;
@@ -2339,6 +2345,21 @@ int tagtree_enter(struct tree_context* c, bool is_visible)
     core_unpin(tagtree_handle);
 
     return rc;
+}
+
+/* The Rocker browser saves this before an action and restores it after loading
+ * a list. Internal, invisible tagtree traversals must not update the viewport. */
+void tagtree_save_scroll(struct tree_context *c, int first_item)
+{
+    if (c->dirlevel >= 0 && c->dirlevel < MAX_DIR_LEVELS)
+        first_visible_item_history[c->dirlevel] = MAX(0, first_item);
+}
+
+int tagtree_get_scroll(struct tree_context *c)
+{
+    if (c->dirlevel >= 0 && c->dirlevel < MAX_DIR_LEVELS)
+        return first_visible_item_history[c->dirlevel];
+    return 0;
 }
 
 /* Exits current database menu or table */

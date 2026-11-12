@@ -533,6 +533,11 @@ static int update_dir(void)
     if( tc.selected_item >= tc.filesindir)
         tc.selected_item=tc.filesindir-1;
 
+#if defined(HAVE_TAGCACHE) && CONFIG_KEYPAD == AGPTEK_ROCKER_PAD
+    if (id3db && tc.filesindir > 0)
+        list->start_item[SCREEN_MAIN] = tagtree_get_scroll(&tc);
+#endif
+    /* Selecting also clamps a restored viewport if the list/screen has shrunk. */
     gui_synclist_select_item(list, tc.selected_item);
     gui_synclist_draw(list);
     gui_synclist_speak_item(list);
@@ -772,6 +777,10 @@ static int dirbrowse(void)
         oldbutton = button;
         gui_synclist_do_button(&tree_lists, &button);
         tc.selected_item = gui_synclist_get_sel_pos(&tree_lists);
+#if defined(HAVE_TAGCACHE) && CONFIG_KEYPAD == AGPTEK_ROCKER_PAD
+        if (id3db)
+            tagtree_save_scroll(&tc, tree_lists.start_item[SCREEN_MAIN]);
+#endif
         int customaction = ONPLAY_NO_CUSTOMACTION;
         bool do_restore_display = true;
         #ifdef HAVE_TAGCACHE

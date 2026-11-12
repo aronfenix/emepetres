@@ -579,7 +579,10 @@ sub buildzip {
 
     glob_unlink("$temp_dir/rocks/*.lua"); # Clean up unwanted *.lua files (e.g. actions.lua, buttons.lua)
 
-    copy("$ROOT/apps/tagnavi.config", "$temp_dir/");
+    # Keep other targets and existing tagnavi_user.config overrides unchanged.
+    my $tagnavi = ($modelname =~ /^agptekrocker(?:native)?$/)
+        ? "$ROOT/apps/tagnavi-emepetres.config" : "$ROOT/apps/tagnavi.config";
+    copy($tagnavi, "$temp_dir/tagnavi.config") or die "Copy $tagnavi failed: $!";
     copy("$ROOT/apps/plugins/disktidy.config", "$temp_dir/rocks/apps/");
 
     if(-e "$temp_dir/rocks/viewers/open_plugins.rock") {

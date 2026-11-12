@@ -36,6 +36,8 @@ void tagtree_init(void) INIT_ATTR;
 bool tagtree_ready(void);
 int tagtree_enter(struct tree_context* c, bool is_visible);
 void tagtree_exit(struct tree_context* c, bool is_visible);
+void tagtree_save_scroll(struct tree_context *c, int first_item);
+int tagtree_get_scroll(struct tree_context *c);
 int tagtree_load(struct tree_context* c);
 char* tagtree_get_entry_name(struct tree_context *c, int id,
                                     char* buf, size_t bufsize);

@@ -127,6 +127,7 @@ int main(void) {
 #include <stdbool.h>
 #include <stdio.h>
 #define MAX_DIR_LEVELS 8
+#define MAX(a,b) ((a) > (b) ? (a) : (b))
 #define logf(...) ((void)0)
 #define DEBUGF(...) ((void)0)
 struct tree_context { int dirlevel, selected_item, currtable, currextra; bool dirfull; };
