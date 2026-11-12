@@ -8,7 +8,7 @@ Make browsing a large local music library much faster and less frustrating, whil
 
 ## Navigation contract (first development milestone)
 
-1. **Home**: a short, predictable root with Artists, Albums, Shuffle, Now Playing, and Settings.
+1. **Home**: a short, predictable emepetres root with Artists, Albums, Search, Last.fm, Shuffle, Now Playing, Settings, and a System submenu for advanced tools.
 2. **Primary journey**: Artists → Artist → Albums → Album → Tracks.
 3. **Back**: always returns one browsing level, preserving the highlighted item and scroll offset.
 4. **Home shortcut**: reachable from anywhere with a consistent, dedicated button gesture. The *exact gesture is provisional*, pending key-map and playback-conflict tests.
@@ -17,9 +17,9 @@ Make browsing a large local music library much faster and less frustrating, whil
 7. **Shuffle**: available for the whole collection and, secondarily, within an artist.
 8. **Appearance**: clean, readable lists designed for the Rocker's 128 × 160 display. Prioritize navigation clarity over elaborate playback graphics.
 
-## Later milestone: Last.fm
+## Primary milestone: offline Last.fm and Windows sync
 
-Record offline plays with Rockbox's scrobbling functionality; investigate a low-friction, duplicate-safe sync tool for Windows 11. This must not require Wi-Fi on the device.
+Last.fm is an absolute priority, as explicitly clarified by the user. The development branch now records completed PCM output duration in isolated offline playback logs, exports a compatible snapshot from Home -> Last.fm, and provides a Windows application for read-only import, durable account-specific deduplication and explicit scrobble submission. The player requires no Wi-Fi. Real-account authorization and hardware/boot/recovery validation remain separate, unverified steps. See `EMEPETRES_LASTFM.md` and `EMEPETRES_NAVIGATION.md` for the implementation and checks.
 
 ## Starting technical facts (verified in this repository)
 

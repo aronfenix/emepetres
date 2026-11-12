@@ -1,4 +1,4 @@
-# emepetres Home and offline Last.fm — 2026-11-12
+# emepetres Home and offline Last.fm â€” 2026-11-12
 
 Work lives on `emepetres/dev`; `master` remains the untouched upstream baseline.
 No device, bootloader, original firmware or real microSD has been accessed.
@@ -64,9 +64,29 @@ Home -> Artists -> Albums -> Tracks -> Back -> playback -> Stop -> Last.fm expor
 Screenshots and the synthetic exported log are retained for inspection. No real
 Last.fm submissions or player data are part of these tests.
 
-Grouped verification of the expanded scope is in progress. Earlier successful
-runs (43250826563 and 43252271573) cover the smaller initial navigation increment;
-they must not be presented as proof of this expanded implementation.
+Grouped verification succeeded in
+[run 43273204096](https://github.com/aronfenix/emepetres/actions/runs/43273204096)
+at test revision `95ed7d44d41fb8e2880708f26e7b199af093d939`:
+**14 C/packaging regressions and 31 Windows sync/interface tests passed**.
+Both simulator UI journeys passed Artists -> Albums -> Tracks -> Back -> full
+synthetic playback -> Home -> Last.fm export. The exported log contains a qualified
+`L` row, and exporting again produced identical bytes without modifying the raw
+record. The Windows executable was built and its packaged GUI smoke passed.
+
+The complete simulator binaries were compiled in
+[run 43270897309](https://github.com/aronfenix/emepetres/actions/runs/43270897309)
+from `d54edb3b55c6ba74f24d6ed1e1a1bdd9adc7cfa2`; the later test run reused them
+only after verifying the firmware/build sources had not changed. Tests wait for
+durable playback completion, rather than assuming runner wall time equals
+consumed audio. Earlier smoke attempts caught premature boot navigation and a
+correctly rejected insufficiently listened `S` row before these test fixes.
+
+The delivered Windows executable from the same source was also launched locally
+with an isolated temporary data directory, exiting successfully without network
+or account data. Its SHA-256 is
+`ba80d5f968a34d005f7fe06818a575a00fcea70557914ca41398ebef204b6d17`.
+No real-account authentication/scrobbles or hardware tests are claimed. Simulator
+SYSFONT and GitHub Actions Node deprecation warnings remain nonfatal.
 
 ## Boot and recovery audit: unresolved installation gate
 
