@@ -26,12 +26,13 @@ jobs:
           - arch: y
             target: agptekrocker
             compiler: mipsel-rockbox-linux-gnu
-    env:
-      RBDEV_PREFIX: ${{ runner.temp }}/emepetres-toolchain-${{ matrix.arch }}
-      RBDEV_DOWNLOAD: ${{ runner.temp }}/emepetres-downloads
-      RBDEV_BUILD: ${{ runner.temp }}/emepetres-build-${{ matrix.arch }}
     steps:
       - uses: actions/checkout@v4
+      - name: Set isolated toolchain paths
+        run: |
+          echo "RBDEV_PREFIX=$RUNNER_TEMP/emepetres-toolchain-${{ matrix.arch }}" >> "$GITHUB_ENV"
+          echo "RBDEV_DOWNLOAD=$RUNNER_TEMP/emepetres-downloads" >> "$GITHUB_ENV"
+          echo "RBDEV_BUILD=$RUNNER_TEMP/emepetres-build-${{ matrix.arch }}" >> "$GITHUB_ENV"
       - name: Install compiler build dependencies on the runner
         run: |
           sudo apt-get update
