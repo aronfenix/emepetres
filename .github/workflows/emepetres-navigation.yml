@@ -30,6 +30,7 @@ jobs:
           xvfb-run -a python3 tools/emepetres/tests/simulator_smoke.py build-agptekrocker
           xvfb-run -a python3 tools/emepetres/tests/simulator_smoke.py build-agptekrockernative
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: emepetres-linux-simulators-NOT-FIRMWARE
           path: |

@@ -191,6 +191,39 @@ int main(void) {
 }
 ''')
 
+    def test_restored_viewport_and_shorter_list(self):
+        source = (ROOT / 'apps/gui/list.c').read_text()
+        clamp = function(source, 'static void gui_list_put_selection_on_screen(')
+        select = function(source, 'void gui_synclist_select_item(')
+        self.compile_run('''
+#include <assert.h>
+#include <stdbool.h>
+#define MAX(a,b) ((a) > (b) ? (a) : (b))
+#define FOR_NB_SCREENS(i) for (int i = 0; i < 1; ++i)
+enum screen_type { SCREEN_MAIN };
+struct gui_synclist {
+    int nb_items, selected_item, selected_size, start_item[1];
+    bool scroll_paginated;
+};
+static int list_get_nb_lines(struct gui_synclist *list, enum screen_type screen) {
+    (void)list; (void)screen; return 6;
+}
+static void _gui_synclist_speak_item(struct gui_synclist *list) { (void)list; }
+''' + clamp + select + '''
+int main(void) {
+    struct gui_synclist list = {50, 0, 1, {32}, false};
+    gui_synclist_select_item(&list, 36);
+    assert(list.selected_item == 36 && list.start_item[0] == 32);
+    list.nb_items = 3; list.start_item[0] = 32;
+    gui_synclist_select_item(&list, 2);
+    assert(list.selected_item == 2 && list.start_item[0] == 0);
+    list.nb_items = 0; list.start_item[0] = 0;
+    gui_synclist_select_item(&list, -1);
+    assert(list.start_item[0] == 0);
+    return 0;
+}
+''')
+
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)
