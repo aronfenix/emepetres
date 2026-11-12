@@ -43,7 +43,8 @@ static const struct button_mapping button_context_standard[]  = {
     { ACTION_STD_QUICKSCREEN, BUTTON_LEFT|BUTTON_REPEAT,  BUTTON_NONE },
     { ACTION_STD_CONTEXT,    BUTTON_SELECT|BUTTON_REPEAT, BUTTON_SELECT },
     { ACTION_STD_MENU,       BUTTON_POWER,                BUTTON_NONE },
-    { ACTION_STD_MENU,       BTN_VOL_COMBO|BUTTON_REL,    BTN_VOL_COMBO },
+    /* Trigger on the chord press; release events contain only released bits. */
+    { ACTION_STD_MENU,       BTN_VOL_COMBO,               BUTTON_NONE },
 
 /*    ACTION_STD_KEYLOCK
  *    ACTION_STD_REC
@@ -56,8 +57,7 @@ static const struct button_mapping button_context_standard[]  = {
 
 
 static const struct button_mapping button_context_mainmenu[]  = {
-    /* Home while already at Home must not toggle back to the prior screen. */
-    { ACTION_NONE,           BTN_VOL_COMBO|BUTTON_REL,    BTN_VOL_COMBO },
+    { ACTION_STD_MENU,       BTN_VOL_COMBO,               BUTTON_NONE },
     { ACTION_TREE_WPS,       BUTTON_POWER,                  BUTTON_NONE },
 
     LAST_ITEM_IN_LIST__NEXTLIST(CONTEXT_TREE),
@@ -87,7 +87,7 @@ static const struct button_mapping button_context_wps[]  = {
  */
 
     { ACTION_STD_KEYLOCK,     BUTTON_POWER,                 BUTTON_NONE },
-    { ACTION_WPS_MENU,        BTN_VOL_COMBO|BUTTON_REL,     BTN_VOL_COMBO},
+    { ACTION_WPS_MENU,        BTN_VOL_COMBO,                BUTTON_NONE },
 
     LAST_ITEM_IN_LIST
 }; /* button_context_wps */
@@ -119,7 +119,7 @@ static const struct button_mapping button_context_list[]  = {
 
 
 static const struct button_mapping button_context_tree[]  = {
-    { ACTION_STD_MENU,        BTN_VOL_COMBO|BUTTON_REL,    BTN_VOL_COMBO},
+    { ACTION_STD_MENU,        BTN_VOL_COMBO,              BUTTON_NONE },
 /*    ACTION_TREE_ROOT_INIT,
  *    ACTION_TREE_PGLEFT, optional
  *    ACTION_TREE_PGRIGHT, optional

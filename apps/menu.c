@@ -605,7 +605,13 @@ int do_menu(const struct menu_item_ex *start_menu, int *start_selected,
             if (menu != &root_menu_)
                 ret = GO_TO_ROOT;
             else
+#if CONFIG_KEYPAD == AGPTEK_ROCKER_PAD
+                /* The Home chord is shared by all normal menus. At the root
+                 * it stays Home instead of toggling back to the prior screen. */
+                ret = GO_TO_ROOT;
+#else
                 ret = GO_TO_PREVIOUS;
+#endif
             done = true;
         }
         else if (action == ACTION_STD_CANCEL)

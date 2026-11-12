@@ -12,7 +12,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install build dependencies on the runner
-        run: sudo apt-get update && sudo apt-get install -y build-essential libsdl2-dev libasound2-dev zip perl
+        run: sudo apt-get update && sudo apt-get install -y build-essential libsdl2-dev libasound2-dev zip perl xvfb xdotool ffmpeg
       - name: Navigation regression tests
         run: python3 tools/emepetres/tests/test_navigation.py
       - name: Build both simulators
@@ -25,6 +25,10 @@ jobs:
             make zip
             cd ..
           done
+      - name: Launch simulators with an isolated synthetic music library
+        run: |
+          xvfb-run -a python3 tools/emepetres/tests/simulator_smoke.py build-agptekrocker
+          xvfb-run -a python3 tools/emepetres/tests/simulator_smoke.py build-agptekrockernative
       - uses: actions/upload-artifact@v4
         with:
           name: emepetres-linux-simulators-NOT-FIRMWARE
@@ -33,3 +37,4 @@ jobs:
             build-agptekrocker/rockbox.zip
             build-agptekrockernative/rockboxui
             build-agptekrockernative/rockbox.zip
+            build-*/smoke-results/
