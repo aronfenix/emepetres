@@ -44,7 +44,9 @@ The Windows application imports read-only copies, previews queued listens,
 protects authorization with current-user Windows DPAPI and submits explicit
 batches to Last.fm. Reimports are deduplicated per account; unknown timezones and
 uncertain network outcomes require review. There is no claim of exactly-once
-network delivery or of a real authorized account test yet.
+network delivery. Real browser authorization was completed manually by the user
+on Windows on 2026-11-12. The interface showed an authorized account and zero
+submitted listens; real scrobble submission remains untested.
 
 See [EMEPETRES_LASTFM.md](EMEPETRES_LASTFM.md) for activation, protocol,
 credentials, limitations and the Windows utility.
@@ -85,7 +87,8 @@ The delivered Windows executable from the same source was also launched locally
 with an isolated temporary data directory, exiting successfully without network
 or account data. Its SHA-256 is
 `ba80d5f968a34d005f7fe06818a575a00fcea70557914ca41398ebef204b6d17`.
-No real-account authentication/scrobbles or hardware tests are claimed. Simulator
+Real-account browser authentication was subsequently verified in the Windows
+application; no real scrobbles or hardware tests are claimed. Simulator
 SYSFONT and GitHub Actions Node deprecation warnings remain nonfatal.
 
 ## Boot and recovery audit: unresolved installation gate
@@ -108,8 +111,11 @@ Dockerfile references Debian 9 and its clone command contains an obsolete/invali
 `ttp://` URL. It was **not executed**. The native bootloader has separate original
 firmware/recovery paths, which have not been validated on this user's unit.
 
-No original firmware 1.1 image, exact hardware revision, installed bootloader,
-recoverability or real cross-compiled build has been verified. Before any device
+The original vendor download labelled 1.1 was subsequently retrieved and
+inspected read-only; see `EMEPETRES_DEVICE_VERIFICATION.md` for its hashes and
+the distinction between download labels and embedded version metadata.
+No exact hardware revision, installed bootloader, recoverability or real
+cross-compiled build has been verified. Before any device
 test: identify the exact boot path and revision, verify an original recovery
 image/procedure and backups, build the appropriate target, and validate using
 separate test storage. The existing 64 GB card and approximately 60 GB of music
@@ -117,8 +123,8 @@ must remain untouched.
 
 ## Remaining work
 
-- Activate the Windows client with the user's personal Last.fm application and
-  browser authorization, then perform an explicitly authorized real-account test.
+- Perform an explicitly authorized real-account scrobble test using a genuine
+  listen; browser authorization is complete. Do not upload synthetic test listens.
 - Broaden UI data fixtures (large lists, multi-disc sets and duplicate album names)
   and exercise Search/First Letter and advanced Files round trips.
 - Verify the exact player's hardware revision, appropriate cross-compiled build,

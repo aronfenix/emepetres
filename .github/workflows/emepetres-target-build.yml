@@ -1,0 +1,87 @@
+name: emepetres device build verification
+
+on:
+  push:
+    branches: [emepetres/dev]
+    paths:
+      - '.github/workflows/emepetres-target-build.yml'
+      - 'tools/rockboxdev.sh'
+      - 'tools/toolchain-patches/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cross-build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: i
+            target: agptekrockernative
+            compiler: mipsel-elf
+          - arch: y
+            target: agptekrocker
+            compiler: mipsel-rockbox-linux-gnu
+    env:
+      RBDEV_PREFIX: ${{ runner.temp }}/emepetres-toolchain-${{ matrix.arch }}
+      RBDEV_DOWNLOAD: ${{ runner.temp }}/emepetres-downloads
+      RBDEV_BUILD: ${{ runner.temp }}/emepetres-build-${{ matrix.arch }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install compiler build dependencies on the runner
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential texinfo flex bison bzip2 zip perl patch automake libtool libtool-bin autoconf libmpc-dev libmpfr-dev libgmp-dev gawk gettext gtk-doc-tools
+      - uses: actions/cache/restore@v4
+        id: toolchain
+        with:
+          path: ${{ env.RBDEV_PREFIX }}
+          key: rockbox-gcc95-ubuntu22-${{ matrix.arch }}-${{ hashFiles('tools/rockboxdev.sh', 'tools/toolchain-patches/**') }}
+      - name: Build the repository's specified cross compiler
+        if: steps.toolchain.outputs.cache-hit != 'true'
+        run: bash tools/rockboxdev.sh --target=${{ matrix.arch }} 2>&1 | tee toolchain.log
+      - uses: actions/cache/save@v4
+        if: steps.toolchain.outputs.cache-hit != 'true'
+        with:
+          path: ${{ env.RBDEV_PREFIX }}
+          key: ${{ steps.toolchain.outputs.cache-primary-key }}
+      - name: Record compiler and exact source
+        run: |
+          echo "$RBDEV_PREFIX/bin" >> "$GITHUB_PATH"
+          "$RBDEV_PREFIX/bin/${{ matrix.compiler }}-gcc" --version | tee compiler-version.txt
+          git rev-parse HEAD > source-revision.txt
+      - name: Cross compile application and bootloader without installing
+        run: |
+          for kind in n b; do
+            directory="build-${{ matrix.target }}-$kind"
+            mkdir "$directory"
+            cd "$directory"
+            ../tools/configure --target=${{ matrix.target }} --type="$kind" 2>&1 | tee configure.log
+            make -j2 2>&1 | tee build.log
+            if [ "$kind" = n ]; then
+              make zip
+            fi
+            cd ..
+          done
+          # These are compiler outputs, not an updater or an installation kit.
+          find build-${{ matrix.target }}-* -maxdepth 1 -type f \( -name '*.rocker' -o -name '*.rockern' -o -name 'rockbox.zip' \) -exec sha256sum {} + > target-sha256.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: emepetres-${{ matrix.target }}-UNVERIFIED-ON-HARDWARE
+          retention-days: 14
+          path: |
+            source-revision.txt
+            compiler-version.txt
+            target-sha256.txt
+            toolchain.log
+            ${{ env.RBDEV_BUILD }}/*.log
+            build-${{ matrix.target }}-*/configure.log
+            build-${{ matrix.target }}-*/build.log
+            build-${{ matrix.target }}-*/*.rocker
+            build-${{ matrix.target }}-*/*.rockern
+            build-${{ matrix.target }}-*/rockbox.zip

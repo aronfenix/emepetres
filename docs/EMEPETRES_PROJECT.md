@@ -19,7 +19,7 @@ Make browsing a large local music library much faster and less frustrating, whil
 
 ## Primary milestone: offline Last.fm and Windows sync
 
-Last.fm is an absolute priority, as explicitly clarified by the user. The development branch now records completed PCM output duration in isolated offline playback logs, exports a compatible snapshot from Home -> Last.fm, and provides a Windows application for read-only import, durable account-specific deduplication and explicit scrobble submission. The player requires no Wi-Fi. Real-account authorization and hardware/boot/recovery validation remain separate, unverified steps. See `EMEPETRES_LASTFM.md` and `EMEPETRES_NAVIGATION.md` for the implementation and checks.
+Last.fm is an absolute priority, as explicitly clarified by the user. The development branch now records completed PCM output duration in isolated offline playback logs, exports a compatible snapshot from Home -> Last.fm, and provides a Windows application for read-only import, durable account-specific deduplication and explicit scrobble submission. The player requires no Wi-Fi. Real-account authorization was completed manually by the user and verified in the Windows interface on 2026-11-12; no real scrobbles were submitted. Hardware/boot/recovery validation remains separate. See `EMEPETRES_LASTFM.md` and `EMEPETRES_NAVIGATION.md` for the implementation and checks.
 
 ## Starting technical facts (verified in this repository)
 
