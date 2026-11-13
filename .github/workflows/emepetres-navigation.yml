@@ -12,6 +12,8 @@ jobs:
     outputs:
       linux: ${{ steps.scope.outputs.linux }}
       windows: ${{ steps.scope.outputs.windows }}
+      baseline: ${{ steps.scope.outputs.baseline }}
+      library: ${{ steps.scope.outputs.library }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -29,20 +31,28 @@ jobs:
               ['git', 'cat-file', '-e', before + '^{commit}'],
               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
           if os.environ['EVENT_NAME'] == 'workflow_dispatch' or not known:
-              linux = windows = True
+              linux = windows = baseline = library = True
           else:
               paths = subprocess.check_output(['git', 'diff', '--name-only', '-z', before, 'HEAD']).decode().split('\0')
               paths = [p for p in paths if p and not p.startswith('docs/')]
               windows = any(p.startswith('tools/emepetres/lastfm/') or
                   p.startswith('apps/plugins/lastfm_') or
                   p == '.github/workflows/emepetres-navigation.yml' for p in paths)
-              linux = any(not p.startswith('tools/emepetres/lastfm/') and p not in (
+              linux_paths = [p for p in paths if not p.startswith('tools/emepetres/lastfm/') and p not in (
                   '.github/workflows/emepetres-target-build.yml',
                   '.github/workflows/emepetres-vendor-audit.yml',
                   'tools/emepetres/tests/test_vendor_audit.py') and
-                  not p.startswith('tools/emepetres/vendor') for p in paths)
+                  not p.startswith('tools/emepetres/vendor')]
+              linux = bool(linux_paths)
+              baseline = any(p != 'tools/emepetres/tests/simulator_library_smoke.py' and
+                  not p.startswith(('tools/emepetres/tests/library_',
+                      'tools/emepetres/tests/test_library_',
+                      'tools/emepetres/tests/ocr_fixtures/')) for p in linux_paths)
+              library = any(p != 'tools/emepetres/tests/simulator_smoke.py' for p in linux_paths)
           with open(os.environ['GITHUB_OUTPUT'], 'a') as stream:
-              stream.write(f'linux={str(linux).lower()}\nwindows={str(windows).lower()}\n')
+              for name, value in dict(linux=linux, windows=windows,
+                      baseline=baseline, library=library).items():
+                  stream.write(f'{name}={str(value).lower()}\n')
           PY
   navigation:
     needs: changes
@@ -90,12 +100,16 @@ jobs:
             make zip
             cd ..
           done
-      - name: Launch simulators with an isolated synthetic music library
+      - name: Prepare verified simulator executables
         run: |
           chmod +x build-agptekrocker/rockboxui build-agptekrockernative/rockboxui
+      - name: Launch simulators with an isolated synthetic music library
+        if: needs.changes.outputs.baseline == 'true'
+        run: |
           xvfb-run -a python3 tools/emepetres/tests/simulator_smoke.py build-agptekrocker
           xvfb-run -a python3 tools/emepetres/tests/simulator_smoke.py build-agptekrockernative
       - name: Exercise scrolling, searches and album boundaries with 2054 synthetic tracks
+        if: needs.changes.outputs.library == 'true'
         run: |
           failed=0
           for target in agptekrocker agptekrockernative; do
