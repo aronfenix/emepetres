@@ -19,7 +19,10 @@ preserving STREAMINFO and compressed audio. Its metadata headers follow
 [RFC 9639 sections 8.1 and 8.6](https://www.rfc-editor.org/rfc/rfc9639.html#section-8.6).
 ffprobe validates tags and ffmpeg fully decodes two representative rewritten
 files before launching the simulator. The runner waits for the actual database
-master header to report all 2,054 indexed tracks, then restarts the simulator.
+staged database header to report all 2,054 scanned tracks, restarts once as
+required by the first foreground commit, then requires a clean master header
+containing all 2,054 records. This follows Rockbox's deferred initial commit;
+the test does not wait indefinitely for a background commit that requires boot.
 
 The checks exercise actual Rocker button input and inspect actual screenshots:
 

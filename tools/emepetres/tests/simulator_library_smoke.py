@@ -168,31 +168,85 @@ class Simulator:
         self.assertions.close()
 
 
-def initialize(sim, track_count):
-    sim.launch()
-    sim.expect('initial-home', selected='Artists')
-    sim.key('Return')
-    sim.capture('initialize-prompt')
-    sim.key('Return')
-    master = sim.root / '.rockbox/database_idx.tcd'
-    deadline = time.monotonic() + 180
-    while time.monotonic() < deadline:
-        sim.alive()
-        data = master.read_bytes() if master.exists() else b''
-        # apps/tagcache.c tagcache_header: three int32 fields, magic/size/count.
-        if len(data) >= 24:
+def database_status(root):
+    """Retain only disposable database filenames, sizes and small header prefixes."""
+    status = {}
+    for path in sorted((root / '.rockbox').glob('database*')):
+        if not path.is_file():
+            continue
+        with path.open('rb') as source:
+            prefix = source.read(24)
+        item = dict(size=path.stat().st_size, header_hex=prefix.hex())
+        if len(prefix) >= 12:
+            # apps/tagcache.c tagcache_header: int32 magic/datasize/entry_count.
             for byteorder in ('<', '>'):
-                magic, _, count = struct.unpack_from(byteorder + 'III', data)
-                if magic == 0x54434810 and count == track_count:
-                    time.sleep(3)
-                    (sim.results / 'database-header.json').write_text(json.dumps(
-                        dict(magic=hex(magic), indexed_tracks=count, byteorder=byteorder)) + '\n')
-                    sim.stop()
-                    sim.launch()
-                    sim.key('Return')
-                    return
-        time.sleep(0.5)
-    raise AssertionError(f'database never committed all {track_count} synthetic tracks')
+                magic, size, count = struct.unpack_from(byteorder + 'III', prefix)
+                item['little_endian' if byteorder == '<' else 'big_endian'] = dict(
+                    magic=hex(magic), datasize=size, entry_count=count)
+                if magic == 0x54434810:
+                    item.update(magic=hex(magic), indexed_tracks=count, byteorder=byteorder)
+                    if path.name == 'database_idx.tcd' and len(prefix) >= 24:
+                        item['dirty'] = struct.unpack_from(byteorder + 'I', prefix, 20)[0]
+        status[path.name] = item
+    return status
+
+
+def initialize(sim, track_count):
+    started = time.monotonic()
+    deadline = started + 180
+    history = []
+
+    def record(phase):
+        files = database_status(sim.root)
+        if not history or history[-1]['phase'] != phase or history[-1]['files'] != files:
+            history.append(dict(phase=phase, elapsed=round(time.monotonic() - started, 2), files=files))
+            (sim.results / 'database-initialization.json').write_text(json.dumps(
+                dict(expected_tracks=track_count, history=history), indent=2) + '\n')
+        return files
+
+    try:
+        sim.launch()
+        sim.expect('initial-home', selected='Artists')
+        sim.key('Return')
+        sim.capture('initialize-prompt')
+        sim.key('Return')
+        while time.monotonic() < deadline:
+            sim.alive()
+            files = record('scanning')
+            # Background commit may deliberately lack a temp buffer. Rockbox
+            # then retains database_tmp.tcd and commits it on the next boot,
+            # where tagcache_thread() calls allocate_tempbuf() in foreground.
+            # Its scan header is finalized only after every input was scanned.
+            if any(files.get(name, {}).get('indexed_tracks') == track_count
+                   for name in ('database_tmp.tcd', 'database_idx.tcd')):
+                time.sleep(3)
+                record('before-required-restart')
+                sim.stop()
+                sim.launch()
+                break
+            time.sleep(0.5)
+        else:
+            raise AssertionError(f'database never scanned all {track_count} synthetic tracks')
+
+        while time.monotonic() < deadline:
+            sim.alive()
+            master = record('committing-after-restart').get('database_idx.tcd', {})
+            if master.get('indexed_tracks') == track_count and master.get('dirty') == 0:
+                (sim.results / 'database-header.json').write_text(json.dumps(master) + '\n')
+                sim.expect('initialized-home', selected='Artists')
+                sim.key('Return')
+                return
+            time.sleep(0.5)
+        raise AssertionError(f'database never committed all {track_count} synthetic tracks after restart')
+    except Exception:
+        record('failure')
+        # Preserve the actual UI plus parsed/hex database headers before the
+        # temporary root is removed. Diagnostics must not hide the first error.
+        try:
+            sim.capture('initialize-failure')
+        except Exception as diagnostic_error:
+            (sim.results / 'initialize-capture-error.txt').write_text(str(diagnostic_error) + '\n')
+        raise
 
 
 def library_checks(sim):
