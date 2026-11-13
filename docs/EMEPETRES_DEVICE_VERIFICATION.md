@@ -44,7 +44,8 @@ match the runner manifest; navigation configuration and Last.fm plugin are
 present. The core, bootloader and plugin are little-endian ELF32 MIPS. The
 executables request `/lib/ld.so.1`; required versioned symbols are GLIBC 2.0
 through 2.3.2, plus ALSA 0.9 / 0.9.0rc4. This inspects build requirements;
-comparison with the vendor's extracted libraries remains pending.
+comparison with the vendor's extracted libraries is documented below, including
+the conditional ALSA loader behavior that remains untested at runtime.
 
 Results are compiler outputs labelled UNVERIFIED-ON-HARDWARE. They contain
 no patched `.upt` update. The legacy update-patching script is not executed.
@@ -91,10 +92,15 @@ the downloaded 1.1 image must not be assumed suitable for that patch.
 
 ## Reproducible vendor-library audit
 
-The dedicated `emepetres-vendor-audit.yml` workflow is prepared; its first full
-vendor extraction/comparison run is still pending. Local parser tests do not
-establish a match with the actual vendor libraries. Do not interpret this
-section as a successful vendor ABI or device verification result.
+The dedicated `emepetres-vendor-audit.yml` workflow first extracted and
+compared the real vendor rootfs in
+[run 43394065921](https://github.com/aronfenix/emepetres/actions/runs/43394065921).
+Extraction completed without reported content loss. The first strict audit
+failed on 58 versioned ALSA imports plus their two version namespaces; the
+investigation below explains the distinction between absent names and the
+vendor library's unversioned exports. The updated conditional classification
+still awaits its own full runner execution. This is not a device ABI or
+installation verification result.
 
 The workflow uses the already successful hosted artifact
 `emepetres-agptekrocker-UNVERIFIED-ON-HARDWARE` from run `43276572060`; it does
@@ -148,9 +154,10 @@ The reports model library lookup in `/lib` then `/usr/lib`; an actual runtime
 loader/cache configuration, symbol interposition, unsupported instructions,
 audio drivers and all device behavior remain untested. Different ISA/FP flags
 may require investigation rather than proving that a binary cannot run.
-`STATIC_CHECKS_PASSED_WITH_UNRESOLVED_EVIDENCE_UNVERIFIED_ON_HARDWARE` means
-the checked requirements passed but the listed static questions remain open.
-Neither passing status validates installation or physical recovery.
+`STATIC_AUDIT_CONDITIONAL_UNVERIFIED_ON_HARDWARE` means the audit completed
+without a demonstrated fatal mismatch, but listed static questions or
+source-inferred loader fallbacks remain open. A green workflow indicates a
+completed audit, not verified runtime ABI compatibility, installation or recovery.
 
 The workflow uploads only JSON/Markdown reports, `readelf` text and text logs
 under `emepetres-vendor-static-audit-UNVERIFIED-ON-HARDWARE`. The original
@@ -169,13 +176,72 @@ record that run's URL and actual findings here before claiming vendor-library
 compatibility. If the original build artifact has expired, report that missing
 input rather than substituting another build silently.
 
-Local verification on 2026-11-13: 23 audit unit tests, 21 passed and two
+Local verification on 2026-11-13: 29 audit unit tests, 27 passed and two
 symlink tests skipped because this Windows session cannot create symlinks.
 Those two tests run on the Ubuntu audit runner. The fixtures cover symbol
 versions/providers, missing libraries/namespaces, MIPS flag differences,
 artifact hashes/paths, nested artifact roots, package identity, extraction
 diagnostics and stock-script excerpts. They use no device, vendor execution,
 network requests, user music or credentials.
+
+### Findings from the actual vendor rootfs
+
+The vendor libc and loader are named `libc-2.16.so` and `ld-2.16.so`.
+The application, bootloader, Last.fm plugin and all seven inspected vendor
+libraries are little-endian ELF32 MIPS with o32/mips32r2 and matching NaN
+encoding. The differing PIC flag is not treated as an ABI mismatch. No ISA
+or available FP attribute mismatch was waived. The vendor libraries omit
+readelf's MIPS FP ABI attribute, so their floating-point calling convention
+remains unresolved. The bootloader and Last.fm plugin had no strict symbol
+comparison errors; vendor dependency closures also had no strict errors.
+
+The vendor ALSA library is `/usr/lib/libasound.so.2.0.0`, requested as
+`libasound.so.2`; its SHA-256 is:
+
+`3782723865531eceb615b55b611012fd376ecff739603fcb845102ae06de3506`
+
+It has no `DT_VERDEF` version definitions, but has `DT_VERSYM` because its
+own GLIBC imports are versioned. All 58 ALSA names requested by the application
+exist as global, visible, unversioned definitions, each with VERSYM index 1
+and no hidden bit. None of the 58 function names is absent. The application
+requests `ALSA_0.9` or `ALSA_0.9.0rc4` with nonhidden requirement indices 5/7.
+
+glibc 2.16's
+[`dl-version.c`, `match_symbol`](https://github.com/bminor/glibc/blob/glibc-2.16/elf/dl-version.c#L86-L99)
+treats a provider with no `DT_VERDEF` as a nonfatal case, optionally emitting
+a version-information diagnostic. Its
+[`dl-lookup.c`, `check_match`](https://github.com/bminor/glibc/blob/glibc-2.16/elf/dl-lookup.c#L140-L167)
+accepts an existing global/unversioned definition for a nonhidden requested
+version when the provider version entry has zero hash and no hidden bit.
+These are source semantics, not an execution of the vendor loader or proof
+that the vendor binary was built without changes to that source.
+
+The updated audit enables this narrow classification only for the known
+vendor loader SHA-256:
+
+`50344a0b3b3d817b485e32b79b671c217347ac532952724ee17413321db90ae8`
+
+It requires the exact named provider, explicit absence of `DT_VERDEF`, presence
+of `DT_VERSYM`, a verified global index-1 export, and a nonhidden consumer
+requirement. Every fallback symbol/version/provider is retained in JSON and
+Markdown as conditional evidence. Missing names, unrelated providers,
+versioned providers lacking the required namespace, hidden requests and
+architecture/FP differences still fail. Matching names cannot establish function
+signatures, actual audio behavior or runtime recovery.
+
+Reanalysis of the first run's readelf reports with the updated parser produced
+58 conditional application fallbacks and no other fatal comparison errors;
+the bootloader and plugin needed no fallback. The vendor image/library bytes
+were not executed. No QEMU test was performed.
+
+Stock startup evidence includes `/etc/init.d/S92_03_start_music_player`
+selecting `/usr/bin/hiby_player.sh`, which starts `/usr/bin/hiby_player`.
+`/etc/init.d/S39_recovery` references `/data/recovery_all` and
+`/usr/bin/recovery_all.sh`. Rootfs/userdata mounts are present in `rcS` and
+`S30_mount_userdata`. The reported explicit vfat mount concerns USB `/dev/sda1`;
+commented `mdev.conf` mmc rules do not demonstrate the SD card's actual mount
+behavior. None of these snippets validates a practical recovery procedure or
+proves that the current exFAT music card mounts successfully under Rockbox.
 
 ## Recovery code evidence and limits
 

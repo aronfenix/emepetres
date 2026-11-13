@@ -18,6 +18,11 @@ VENDOR_SHA256 = 'd56d5b093477ad32ad50d41f09155d23c9f9a458993d2e40e800dd704c73b8e
 VENDOR_BYTES = 32466944
 BUILD_REVISION = '9b56f100abb7c824668ca3fb8a35332d290d1dfe'
 BUILD_RUN = '43276572060'
+VENDOR_LOADER_SHA256 = '50344a0b3b3d817b485e32b79b671c217347ac532952724ee17413321db90ae8'
+GLIBC_216_SOURCES = [
+    'https://github.com/bminor/glibc/blob/glibc-2.16/elf/dl-version.c#L86-L99',
+    'https://github.com/bminor/glibc/blob/glibc-2.16/elf/dl-lookup.c#L140-L167',
+]
 
 
 def parse_readelf(text):
@@ -43,7 +48,9 @@ def parse_readelf(text):
     result['needed'] = re.findall(r'\(NEEDED\).*\[([^\]]+)\]', text)
     result['search_paths'] = re.findall(r'\((?:RPATH|RUNPATH)\).*\[([^\]]*)\]', text)
     section, library = None, None
-    version_owners = {}
+    version_owners, version_hidden, exported_indices, global_indices = {}, {}, {}, set()
+    result['has_versym'] = bool(re.search(r'\(VERSYM\)', text))
+    result['has_verdef'] = bool(re.search(r'\(VERDEF\)', text))
     for line in text.splitlines():
         if line.startswith('Symbol table '):
             section = 'symbols' if "'.dynsym'" in line else None
@@ -52,7 +59,8 @@ def parse_readelf(text):
         elif line.startswith('Version definition section '):
             section = 'definitions'
         elif line.startswith('Version symbols section '):
-            section = None
+            section = 'versyms'
+            result['has_versym'] = True
         if section == 'symbols':
             match = re.match(r'\s*\d+:\s+\S+\s+\d+\s+\S+\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)', line)
             if not match:
@@ -68,6 +76,8 @@ def parse_readelf(text):
                     version_index=int(number.group(1)) if number else None))
             elif visibility in ('DEFAULT', 'PROTECTED'):
                 result['exports'].append([name, version])
+                index_match = re.match(r'\s*(\d+):', line)
+                exported_indices[int(index_match.group(1))] = (name, version)
                 if '@@' in decorated or version is None:
                     result['defaults'].append(name)
         elif section == 'needs':
@@ -80,19 +90,36 @@ def parse_readelf(text):
                 result['requires'][library].append(match.group(1))
                 number = re.search(r'\bVersion:\s*(\d+)', line)
                 if number:
-                    version_owners[int(number.group(1))] = library
+                    raw_index = int(number.group(1))
+                    version_owners[raw_index & 0x7fff] = library
+                    version_hidden[raw_index & 0x7fff] = bool(raw_index & 0x8000)
         elif section == 'definitions':
             match = re.search(r'\bName:\s*(\S+)', line)
             if match:
                 result['definitions'].append(match.group(1))
+                result['has_verdef'] = True
+        elif section == 'versyms':
+            row = re.match(r'\s*([0-9a-f]+):\s*(.*)', line)
+            if row:
+                start = int(row.group(1), 16)
+                cells = re.finditer(r'([0-9a-f]+)(h?)\s+\([^)]*\)', row.group(2))
+                for offset, cell in enumerate(cells):
+                    if int(cell.group(1), 16) == 1 and not cell.group(2):
+                        global_indices.add(start + offset)
     for symbol in result['imports']:
         symbol['provider'] = version_owners.get(symbol['version_index'])
+        symbol['version_hidden'] = version_hidden.get(symbol['version_index'])
+    result['unversioned_globals'] = sorted({exported_indices[index][0] for index in global_indices
+        if index in exported_indices and exported_indices[index][1] is None})
     return result
 
 
-def compare_elf(consumer, providers):
+def compare_elf(consumer, providers, allow_glibc_216_fallback=False):
     """Check a consumer against its complete vendor dependency closure."""
-    errors, weak = [], []
+    errors, weak, unresolved, fallbacks = [], [], [], []
+    def unversioned_provider(provider):
+        return (allow_glibc_216_fallback and provider.get('has_verdef') is False
+                and provider.get('has_versym') is True)
     for name in consumer['needed']:
         if name not in providers:
             errors.append('Missing dependency: ' + name)
@@ -117,7 +144,11 @@ def compare_elf(consumer, providers):
         else:
             for version in versions:
                 if version not in provider['definitions']:
-                    errors.append('Missing version namespace: ' + name + ':' + version)
+                    if unversioned_provider(provider):
+                        unresolved.append('No provider version namespace: ' + name + ':' + version +
+                                          '; glibc 2.16 may use global unversioned symbols (source inference, not executed)')
+                    else:
+                        errors.append('Missing version namespace: ' + name + ':' + version)
     for symbol in consumer['imports']:
         name, version = symbol['name'], symbol['version']
         candidates = list(providers.values())
@@ -133,13 +164,24 @@ def compare_elf(consumer, providers):
             candidates = [providers[lib] for lib in owners if lib in providers]
         found = any(([name, version] in item['exports'] if version else name in item['defaults'])
                     for item in candidates)
+        if not found and version and symbol.get('version_hidden') is False:
+            for owner in owners:
+                provider = providers.get(owner)
+                if (provider and unversioned_provider(provider)
+                        and name in provider.get('unversioned_globals', [])
+                        and [name, None] in provider['exports']):
+                    fallbacks.append(dict(name=name, required_version=version, provider=owner,
+                                          provider_version_index=1))
+                    found = True
+                    break
         if not found:
             decorated = name + ('@' + version if version else '')
             if symbol['weak']:
                 weak.append(decorated)
             else:
                 errors.append('Missing required symbol: ' + decorated)
-    return dict(errors=sorted(set(errors)), unresolved_weak=sorted(set(weak)))
+    return dict(errors=sorted(set(errors)), unresolved_weak=sorted(set(weak)),
+                unresolved=sorted(set(unresolved)), unversioned_fallbacks=fallbacks)
 
 
 def vendor_path(root, path):
@@ -386,23 +428,34 @@ def audit(args, report):
         # has no PT_INTERP. Include its exports for libc's private imports too.
         loader_name = consumer['interpreter'] or '/lib/ld.so.1'
         loader_path = vendor_path(root, loader_name)
+        allow_fallback = False
         if not loader_path.is_file():
             report['errors'].append(label + ': missing vendor ELF interpreter')
         else:
             loader = readelf(loader_path, args.report_dir, 'vendor-loader')
             report['loader'] = dict(path=loader_name, **loader)
             providers.setdefault('ld.so.1', loader)
-        comparison = compare_elf(consumer, providers)
+            allow_fallback = loader['sha256'] == VENDOR_LOADER_SHA256
+            report['loader_semantics'] = dict(model='glibc-2.16-source-inference',
+                enabled_for_known_loader=allow_fallback, known_loader_sha256=VENDOR_LOADER_SHA256,
+                primary_sources=GLIBC_216_SOURCES,
+                limitation='Vendor loader execution and source/binary equivalence have not been verified.')
+        comparison = compare_elf(consumer, providers, allow_glibc_216_fallback=allow_fallback)
         report['errors'].extend(label + ': ' + error for error in comparison['errors'])
+        report['unresolved'].extend(label + ': ' + item for item in comparison['unresolved'])
+        if comparison['unversioned_fallbacks']:
+            report['unresolved'].append(label + ': ' + str(len(comparison['unversioned_fallbacks'])) +
+                ' imports rely on inferred glibc 2.16 unversioned fallback; vendor loader/audio not executed')
         closure = {}
         for name, provider in providers.items():
             if not provider['fp_abi']:
                 report['unresolved'].append(name + ': no readelf MIPS FP ABI attribute')
             if provider['search_paths']:
                 report['unresolved'].append(name + ': runtime RPATH/RUNPATH present: ' + repr(provider['search_paths']))
-            checked = compare_elf(provider, providers)
+            checked = compare_elf(provider, providers, allow_glibc_216_fallback=allow_fallback)
             closure[name] = checked
             report['errors'].extend(label + ' dependency ' + name + ': ' + error for error in checked['errors'])
+            report['unresolved'].extend(label + ' dependency ' + name + ': ' + item for item in checked['unresolved'])
         report['targets'][label] = dict(elf=consumer, comparison=comparison,
                                        dependency_closure=closure)
         if consumer['search_paths']:
@@ -415,6 +468,7 @@ def audit(args, report):
         'Library lookup models /lib then /usr/lib; runtime loader configuration and symbol interposition remain untested.',
         'Weak unresolved symbols are recorded but do not fail ELF linking compatibility.',
         'ubi-reader does not replay the UBIFS journal; uncommitted entries may be absent.',
+        'Source-inferred glibc fallback is conditional; matching unversioned symbol names does not prove function ABI/audio behavior.',
         'A passing report is not an installation kit or permission to flash/format storage.',
     ]
 
@@ -435,7 +489,7 @@ def main():
     report['errors'] = sorted(set(report['errors']))
     report['unresolved'] = sorted(set(report['unresolved']))
     report['status'] = ('FAILED' if report['errors'] else
-        'STATIC_CHECKS_PASSED_WITH_UNRESOLVED_EVIDENCE_UNVERIFIED_ON_HARDWARE' if report['unresolved'] else
+        'STATIC_AUDIT_CONDITIONAL_UNVERIFIED_ON_HARDWARE' if report['unresolved'] else
         'STATIC_AUDIT_PASSED_UNVERIFIED_ON_HARDWARE')
     (args.report_dir / 'vendor-audit.json').write_text(json.dumps(report, indent=2), encoding='utf-8')
     lines = ['# Vendor static ABI audit', '', 'Status: ' + report['status'], '',
@@ -443,18 +497,31 @@ def main():
              'Vendor SHA-256: `' + VENDOR_SHA256 + '`', '',
              '## Errors', '']
     lines += ['- ' + item for item in report['errors']] or ['None.']
-    lines += ['', '## Targets', '', '| Target | Bytes | Imports | Vendor dependencies | Errors |',
-              '| --- | ---: | ---: | ---: | ---: |']
+    lines += ['', '## Targets', '', '| Target | Bytes | Imports | Vendor dependencies | Conditional fallbacks | Errors |',
+              '| --- | ---: | ---: | ---: | ---: | ---: |']
     for label, entry in report.get('targets', {}).items():
         elf = entry['elf']
         lines.append('| ' + label + ' | ' + str(elf['bytes']) + ' | ' + str(len(elf['imports'])) +
-                     ' | ' + str(len(entry['dependency_closure'])) + ' | ' + str(len(entry['comparison']['errors'])) + ' |')
+                     ' | ' + str(len(entry['dependency_closure'])) + ' | ' +
+                     str(len(entry['comparison']['unversioned_fallbacks'])) + ' | ' +
+                     str(len(entry['comparison']['errors'])) + ' |')
     lines += ['', '## Stock scripts', '']
     for category, paths in report.get('stock_scripts', {}).get('categories', {}).items():
         lines.append('- ' + category + ': ' + (', '.join('`' + path + '`' for path in paths) or 'not found'))
     lines += ['', 'Exact numbered excerpts, library symbols, dependency closures and checksums are in `vendor-audit.json`.',
               '', '## Unresolved static evidence', '']
     lines += ['- ' + item for item in report['unresolved']] or ['None recorded; physical verification is still required.']
+    if any(entry['comparison']['unversioned_fallbacks'] for entry in report.get('targets', {}).values()):
+        lines += ['', '## Conditional loader fallback', '',
+            'Every fallback symbol, requested version and exact provider is listed in `vendor-audit.json`. '
+            'No vendor code was executed. This is source-based inference for the hash-identified vendor loader, '
+            'not proof of its runtime behavior or of function/audio ABI compatibility.', '',
+            '| Target | Symbol | Requested version | Unversioned provider |', '| --- | --- | --- | --- |']
+        for label, entry in report['targets'].items():
+            for symbol in entry['comparison']['unversioned_fallbacks']:
+                lines.append('| ' + label + ' | `' + symbol['name'] + '` | `' + symbol['required_version'] +
+                             '` | `' + symbol['provider'] + '` (global index 1) |')
+        lines += ['', 'Primary glibc 2.16 source:'] + ['- ' + url for url in GLIBC_216_SOURCES]
     lines += ['', '## Limitations', '']
     lines += ['- ' + item for item in report.get('limitations', ['Audit stopped before all checks completed.'])]
     (args.report_dir / 'vendor-audit.md').write_text('\n'.join(lines) + '\n', encoding='utf-8')

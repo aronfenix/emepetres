@@ -66,6 +66,20 @@ class ReadelfParser(unittest.TestCase):
 ''')
         self.assertEqual(result['exports'], [['visible', None]])
 
+    def test_versym_global_indices_and_hidden_requirement_are_parsed(self):
+        text = HEADER.replace('answer@@SAMPLE_1.0', 'answer').replace(
+            'Version needs section', '''Version symbols section '.gnu.version' contains 4 entries:
+  000: 0 (*local*) 2 (GLIBC_2.0) 1 (*global*) 1 (*global*)
+Version needs section''').replace('Flags: none  Version: 2', 'Flags: none  Version: 32770')
+        result = audit.parse_readelf(text)
+        self.assertTrue(result['has_versym'])
+        self.assertFalse(result['has_verdef'])
+        self.assertEqual(result['unversioned_globals'], ['answer'])
+        self.assertEqual(result['imports'][0]['provider'], 'libc.so.6')
+        self.assertTrue(result['imports'][0]['version_hidden'])
+        hidden = audit.parse_readelf(text.replace('1 (*global*)\nVersion needs', '1h (*global*)\nVersion needs'))
+        self.assertEqual(hidden['unversioned_globals'], [])
+
 
 class SymbolComparison(unittest.TestCase):
     def setUp(self):
@@ -124,6 +138,45 @@ FP ABI:''')
         self.assertTrue(audit.compare_elf(self.consumer, self.providers)['errors'])
         self.provider['defaults'] = ['memcpy']
         self.assertEqual(audit.compare_elf(self.consumer, self.providers)['errors'], [])
+
+    def unversioned_provider(self):
+        self.provider.update(exports=[['memcpy', None]], defaults=['memcpy'], definitions=[],
+                             has_verdef=False, has_versym=True, unversioned_globals=['memcpy'])
+
+    def test_glibc216_global_fallback_is_explicitly_unresolved_not_missing(self):
+        self.unversioned_provider()
+        result = audit.compare_elf(self.consumer, self.providers, allow_glibc_216_fallback=True)
+        self.assertEqual(result['errors'], [])
+        self.assertEqual(result['unversioned_fallbacks'], [dict(name='memcpy',
+                         required_version='GLIBC_2.0', provider='libc.so.6', provider_version_index=1)])
+        self.assertTrue(result['unresolved'])
+
+    def test_fallback_remains_strict_without_verified_loader_model(self):
+        self.unversioned_provider()
+        self.assertTrue(audit.compare_elf(self.consumer, self.providers)['errors'])
+
+    def test_fallback_cannot_hide_missing_name_wrong_provider_or_namespace(self):
+        self.unversioned_provider()
+        for changes in ({'unversioned_globals': []}, {'has_verdef': True}, {'has_versym': False},
+                        {'exports': []}):
+            with self.subTest(changes=changes):
+                provider = dict(self.provider, **changes)
+                result = audit.compare_elf(self.consumer, {'libc.so.6': provider},
+                                           allow_glibc_216_fallback=True)
+                self.assertTrue(result['errors'])
+
+    def test_hidden_requirement_cannot_use_unversioned_fallback(self):
+        self.unversioned_provider()
+        self.consumer['imports'][0]['version_hidden'] = True
+        self.assertTrue(audit.compare_elf(self.consumer, self.providers,
+                       allow_glibc_216_fallback=True)['errors'])
+
+    def test_unversioned_fallback_cannot_take_symbol_from_unrelated_provider(self):
+        self.unversioned_provider()
+        self.providers['libwrong.so.1'] = self.provider.copy()
+        self.provider['exports'] = []
+        self.assertTrue(audit.compare_elf(self.consumer, self.providers,
+                       allow_glibc_216_fallback=True)['errors'])
 
 
 class RootfsPaths(unittest.TestCase):
