@@ -1,5 +1,11 @@
 name: emepetres visual preview
 on:
+  push:
+    branches: [emepetres/dev]
+    paths:
+      - 'wps/emepetres/**'
+      - 'tools/emepetres/visual_preview.py'
+      - '.github/workflows/emepetres-visual.yml'
   workflow_dispatch:
 permissions:
   contents: read

@@ -2,7 +2,11 @@ name: emepetres navigation
 on:
   push:
     branches: [emepetres/dev]
-    paths-ignore: ['docs/**']
+    paths-ignore:
+      - 'docs/**'
+      - 'wps/emepetres/**'
+      - 'tools/emepetres/visual_preview.py'
+      - '.github/workflows/emepetres-visual.yml'
   workflow_dispatch:
     inputs:
       extended_library:
