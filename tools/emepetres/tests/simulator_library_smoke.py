@@ -98,7 +98,11 @@ class Simulator:
         stem = self.results / f'{self.sequence:03d}-{label}'
         png = stem.with_suffix('.png')
         g = self.geometry
-        run(['ffmpeg', '-y', '-v', 'error', '-f', 'x11grab', '-video_size',
+        # This is a single raw X11 frame with known geometry/rate. Avoid
+        # libavformat probing megabytes of future frames before returning it.
+        # https://ffmpeg.org/ffmpeg-formats.html#Format-Options
+        run(['ffmpeg', '-y', '-v', 'error', '-f', 'x11grab',
+             '-probesize', '32', '-analyzeduration', '0', '-framerate', '30', '-video_size',
              g['WIDTH'] + 'x' + g['HEIGHT'], '-i',
              os.environ['DISPLAY'] + '+' + g['X'] + ',' + g['Y'],
              '-frames:v', '1', str(png)])

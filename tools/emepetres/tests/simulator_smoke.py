@@ -70,6 +70,7 @@ with tempfile.TemporaryDirectory(prefix='emepetres-simulator-') as tmp:
 
         def capture(name):
             subprocess.run(['ffmpeg', '-y', '-v', 'error', '-f', 'x11grab',
+                            '-probesize', '32', '-analyzeduration', '0', '-framerate', '30',
                             '-video_size', geometry['WIDTH'] + 'x' + geometry['HEIGHT'],
                             '-i', os.environ['DISPLAY'] + '+' + geometry['X'] + ',' + geometry['Y'],
                             '-frames:v', '1', str(results / f'{name}.png')], check=True)
