@@ -2,11 +2,50 @@ name: emepetres navigation
 on:
   push:
     branches: [emepetres/dev]
+    paths-ignore: ['docs/**']
   workflow_dispatch:
 permissions:
   contents: read
 jobs:
+  changes:
+    runs-on: ubuntu-24.04
+    outputs:
+      linux: ${{ steps.scope.outputs.linux }}
+      windows: ${{ steps.scope.outputs.windows }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 20
+      - name: Select the checks affected by this change
+        id: scope
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          python3 - <<'PY'
+          import os, subprocess
+          before = os.environ.get('BEFORE_SHA', '')
+          known = before and set(before) != {'0'} and subprocess.run(
+              ['git', 'cat-file', '-e', before + '^{commit}'],
+              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
+          if os.environ['EVENT_NAME'] == 'workflow_dispatch' or not known:
+              linux = windows = True
+          else:
+              paths = subprocess.check_output(['git', 'diff', '--name-only', '-z', before, 'HEAD']).decode().split('\0')
+              paths = [p for p in paths if p and not p.startswith('docs/')]
+              windows = any(p.startswith('tools/emepetres/lastfm/') or
+                  p.startswith('apps/plugins/lastfm_') or
+                  p == '.github/workflows/emepetres-navigation.yml' for p in paths)
+              linux = any(not p.startswith('tools/emepetres/lastfm/') and p not in (
+                  '.github/workflows/emepetres-target-build.yml',
+                  '.github/workflows/emepetres-vendor-audit.yml') and
+                  not p.startswith('tools/emepetres/vendor') for p in paths)
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as stream:
+              stream.write(f'linux={str(linux).lower()}\nwindows={str(windows).lower()}\n')
+          PY
   navigation:
+    needs: changes
+    if: needs.changes.outputs.linux == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -23,20 +62,24 @@ jobs:
           # This seed run built both simulators successfully. Reuse is allowed
           # only when every firmware/build input is identical, irrespective of
           # changes to docs, CI orchestration or the separate Windows/test tools.
-          if git diff --quiet d54edb3b55c6ba74f24d6ed1e1a1bdd9adc7cfa2 HEAD -- . ':!docs' ':!.github' ':!tools/emepetres'; then
+          seed=d54edb3b55c6ba74f24d6ed1e1a1bdd9adc7cfa2
+          git cat-file -e "$seed^{commit}" || git fetch --no-tags --depth=1 origin "$seed"
+          if git diff --quiet "$seed" HEAD -- . ':!docs' ':!.github' ':!tools/emepetres'; then
             echo 'verified=true' >> "$GITHUB_OUTPUT"
           else
             echo 'verified=false' >> "$GITHUB_OUTPUT"
           fi
       - uses: actions/download-artifact@v4
+        id: simulator_cache
         if: steps.reuse.outputs.verified == 'true'
+        continue-on-error: true
         with:
           name: emepetres-linux-simulators-NOT-FIRMWARE
           run-id: 43270897309
           github-token: ${{ github.token }}
           path: .
       - name: Build both simulators
-        if: steps.reuse.outputs.verified != 'true'
+        if: steps.reuse.outputs.verified != 'true' || steps.simulator_cache.outcome == 'failure'
         run: |
           for target in agptekrocker agptekrockernative; do
             mkdir "build-$target"
@@ -62,6 +105,8 @@ jobs:
             build-agptekrockernative/rockbox.zip
             build-*/smoke-results/
   lastfm-windows:
+    needs: changes
+    if: needs.changes.outputs.windows == 'true'
     runs-on: windows-latest
     timeout-minutes: 15
     env:
