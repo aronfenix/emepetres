@@ -1,0 +1,24 @@
+# emepetres playback, 128x160. GPL-2.0-or-later.
+%wd
+%Fl(2,14-Nimbus.fnt)
+%Fl(3,10-Adobe-Helvetica-Bold.fnt)
+%V(6,3,116,12,3)
+%Vf(8BE2BC)
+%al%?mp<Detenido|Sonando|En pausa|Avanzando|Retrocediendo>%ar%bl%%
+%V(0,20,128,68,2)
+%dr(32,0,64,64,1E2A31)
+%Cl(32,0,64,64,c,c)
+%?C<%Cd|%ac♪>
+%V(6,94,116,18,2)
+%Vf(E9EEE8)
+%s%?it<%it|%fn>
+%V(6,115,116,12,3)
+%Vf(9AA9AD)
+%s%?ia<%ia|Artista desconocido>
+%V(6,133,116,7,0)
+%Vf(8BE2BC)
+%Vb(29373E)
+%pb(0,0,116,3)
+%V(6,146,116,12,3)
+%Vf(9AA9AD)
+%al%pc%ar%pt

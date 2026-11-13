@@ -1,0 +1,45 @@
+name: emepetres visual preview
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+jobs:
+  visual:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install preview runtime
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq libsdl2-2.0-0 libasound2t64 xvfb xdotool ffmpeg
+      - uses: actions/download-artifact@v4
+        with:
+          name: emepetres-linux-simulators-NOT-FIRMWARE
+          run-id: 43270897309
+          github-token: ${{ github.token }}
+          path: .
+      - name: Build fonts using the Rockbox converter
+        run: |
+          mkdir -p visual-output/overlay/.rockbox/fonts
+          gcc -O2 tools/convbdf.c -o /tmp/emepetres-convbdf
+          for name in 14-Nimbus 19-Nimbus; do
+            /tmp/emepetres-convbdf -f -o "visual-output/overlay/.rockbox/fonts/$name.fnt" "fonts/$name.bdf"
+          done
+      - name: Parse skins with the Rocker parser
+        run: |
+          mkdir build-checkwps
+          cd build-checkwps
+          ../tools/configure --target=agptekrocker --type=C
+          make -j2 > checkwps-build.log 2>&1 || { tail -60 checkwps-build.log; exit 1; }
+          ./checkwps.agptekrocker ../wps/emepetres/emepetres.sbs ../wps/emepetres/emepetres.wps
+      - name: Package assets and capture the actual simulator
+        run: |
+          chmod +x build-agptekrocker/rockboxui
+          xvfb-run -a python3 tools/emepetres/visual_preview.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: emepetres-visual
+          path: |
+            visual-output/
+            build-checkwps/checkwps-build.log

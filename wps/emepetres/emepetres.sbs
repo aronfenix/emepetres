@@ -1,0 +1,25 @@
+# emepetres library, 128x160. GPL-2.0-or-later.
+# Five readable rows; title and playback stay outside the scrolling list.
+%wd
+%Fl(2,14-Nimbus.fnt)
+%Fl(3,19-Nimbus.fnt)
+%Fl(4,10-Adobe-Helvetica-Bold.fnt)
+%V(6,3,82,12,4)
+%Vf(8BE2BC)
+emepetrés
+%V(91,4,31,10,0)
+%Vf(9AA9AD)
+%ar%bl%%
+%V(6,17,116,21,3)
+%Vf(E9EEE8)
+%s%?Lt<%Lt|Biblioteca>
+%Vi(-,4,40,120,105,2)
+%Lb(r,120,21)
+# The two r viewports share the same row origin. Only the selected row scrolls.
+%Vl(r,0,0,120,21,2)
+%?Lc<%dr(0,0,120,21,8BE2BC)|%dr(0,0,120,21,10181D)>
+%Vl(r,6,3,108,18,2)
+%?Lc<%Vf(10181D)|%Vf(E9EEE8)>%s%LT
+%V(6,148,116,12,4)
+%Vf(9AA9AD)
+%?mp<Volver: izquierda|%s%?it<%it|Sonando>|En pausa|Avanzando|Retrocediendo>
