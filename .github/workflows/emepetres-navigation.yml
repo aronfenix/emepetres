@@ -38,7 +38,8 @@ jobs:
                   p == '.github/workflows/emepetres-navigation.yml' for p in paths)
               linux = any(not p.startswith('tools/emepetres/lastfm/') and p not in (
                   '.github/workflows/emepetres-target-build.yml',
-                  '.github/workflows/emepetres-vendor-audit.yml') and
+                  '.github/workflows/emepetres-vendor-audit.yml',
+                  'tools/emepetres/tests/test_vendor_audit.py') and
                   not p.startswith('tools/emepetres/vendor') for p in paths)
           with open(os.environ['GITHUB_OUTPUT'], 'a') as stream:
               stream.write(f'linux={str(linux).lower()}\nwindows={str(windows).lower()}\n')
