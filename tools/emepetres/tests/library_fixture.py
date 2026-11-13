@@ -56,11 +56,14 @@ def library_tracks():
                                        DISCNUMBER=str(disc), TRACKNUMBER=str(track))
     yield 'edge/echo-aster.flac', dict(ARTIST='Aster', ALBUM='Echo', TITLE='Amber', TRACKNUMBER='1')
     yield 'edge/echo-zulu.flac', dict(ARTIST='Zulu', ALBUM='Echo', TITLE='Indigo', TRACKNUMBER='1')
+    alphabet = 'BCDEFGHJKMNPQRST'
+    track_names = ('One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight')
     for artist in range(256):
+        suffix = alphabet[artist // 16] + alphabet[artist % 16]
         for track in range(1, 9):
             yield f'bison-{artist:03d}/{track:02d}.flac', dict(
-                ARTIST=f'Bison {artist:03d}', ALBUM=f'Opus {artist:03d}',
-                TITLE=f'Tune {track:03d}', TRACKNUMBER=str(track))
+                ARTIST=f'Bison {suffix}', ALBUM=f'Opus {suffix}',
+                TITLE=f'Tune {track_names[track - 1]}', TRACKNUMBER=str(track))
 
 
 def create_library(root, report):

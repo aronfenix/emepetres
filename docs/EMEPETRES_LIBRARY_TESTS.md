@@ -24,6 +24,13 @@ required by the first foreground commit, then requires a clean master header
 containing all 2,054 records. This follows Rockbox's deferred initial commit;
 the test does not wait indefinitely for a background commit that requires boot.
 
+Bulk artist and album tags use two-letter suffixes from `BCDEFGHJKMNPQRST`:
+`Bison BB` / `Opus BB` through `Bison TT` / `Opus TT`; index 20 is `CF`.
+Their track titles are `Tune One` through `Tune Eight`. Numeric filenames and
+actual track/disc metadata remain numeric. These clear labels avoid ambiguous
+OCR digits without accepting substitutions such as letter O for digit zero.
+The alphabet excludes A so the three A-query results remain unique.
+
 The checks exercise actual Rocker button input and inspect actual screenshots:
 
 - Artists scrolled beyond the first screen; selected album and track after
@@ -41,7 +48,9 @@ The checks exercise actual Rocker button input and inspect actual screenshots:
 Every asserted screen retains its PNG, raw whole-screen OCR, isolated selected-row
 OCR, and an assertion record with expected and observed values. Selection checks
 locate the theme's yellow list cursor and OCR that row; a name visible elsewhere
-cannot satisfy them. Only letter case and whitespace are normalized. Missing,
+cannot satisfy them. Selected names must match complete word tokens, so `A`
+cannot match `Random` and `Artist` cannot match `Artists`. Only letter case and
+whitespace are normalized. Missing,
 ambiguous, or incorrect OCR fails the run. Bounded retries recapture the same
 state and do not send additional navigation. A pixel comparison checks the
 restored scrolled list below the status/title bars.

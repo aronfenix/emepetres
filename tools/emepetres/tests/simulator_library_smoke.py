@@ -9,6 +9,7 @@ import argparse
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import struct
 import subprocess
@@ -25,6 +26,11 @@ def run(args, **kwargs):
 
 def normalized(text):
     return ' '.join(text.casefold().split())
+
+
+def selected_matches(expected, observed):
+    return re.search(r'(?<!\w)' + re.escape(normalized(expected)) + r'(?!\w)',
+                     normalized(observed)) is not None
 
 
 class Simulator:
@@ -137,9 +143,9 @@ class Simulator:
         # retained, including failures, and final failure exits nonzero.
         for attempt in range(3):
             state = self.capture(label)
-            full, row = normalized(state['text']), normalized(state['selected'])
+            full = normalized(state['text'])
             errors = []
-            if selected and normalized(selected) not in row:
+            if selected and not selected_matches(selected, state['selected']):
                 errors.append(f'selected {selected!r}, observed {state["selected"]!r}')
             errors += [f'missing {value!r}' for value in contains if normalized(value) not in full]
             errors += [f'unexpected {value!r}' for value in absent if normalized(value) in full]
@@ -250,21 +256,21 @@ def initialize(sim, track_count):
 
 
 def library_checks(sim):
-    sim.expect('artists-root', contains=('Aster', 'Bison 000'), selected='All tracks')
-    sim.key('Down', 23)  # Two shortcuts, Aster, Bison 000..020.
-    scrolled = sim.expect('artists-scrolled', selected='Bison 020', absent=('Aster',))
+    sim.expect('artists-root', contains=('Aster',), selected='All tracks')
+    sim.key('Down', 23)  # Two shortcuts, Aster, Bison BB..CF (indices 0..20).
+    scrolled = sim.expect('artists-scrolled', selected='Bison CF', absent=('Aster',))
     sim.key('Return')
     sim.key('Down', 3)
-    sim.expect('bison-album', selected='Opus 020')
+    sim.expect('bison-album', selected='Opus CF')
     sim.key('Return')
-    sim.expect('bison-tracks', selected='Tune 001')
+    sim.expect('bison-tracks', selected='Tune One')
     sim.home()
     sim.key('Return')
-    sim.expect('same-route-depth-restored', selected='Tune 001')
+    sim.expect('same-route-depth-restored', selected='Tune One')
     sim.key('Left')
-    sim.expect('back-album-selection', selected='Opus 020')
+    sim.expect('back-album-selection', selected='Opus CF')
     sim.key('Left')
-    back = sim.expect('back-artist-selection', selected='Bison 020')
+    back = sim.expect('back-artist-selection', selected='Bison CF')
     sim.same_view(scrolled, back)
 
     sim.route(1)
@@ -276,7 +282,7 @@ def library_checks(sim):
         if index < 3:
             sim.key('Down')
     sim.route(0)
-    restored = sim.expect('artists-restored-after-albums', selected='Bison 020')
+    restored = sim.expect('artists-restored-after-albums', selected='Bison CF')
     sim.same_view(scrolled, restored)
     sim.route(1)
     sim.expect('albums-depth-selection-restored', selected='Four')

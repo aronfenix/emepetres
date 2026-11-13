@@ -7,7 +7,7 @@ import unittest
 from unittest.mock import patch
 
 from library_fixture import library_tracks, replace_comments, split_flac
-from simulator_library_smoke import database_status, initialize
+from simulator_library_smoke import database_status, initialize, selected_matches
 
 
 def block(kind, payload, last=False):
@@ -15,6 +15,24 @@ def block(kind, payload, last=False):
 
 
 class LibraryFixture(unittest.TestCase):
+    def test_selected_match_requires_complete_tokens_and_preserves_ocr_content(self):
+        for expected, observed in [('A', '[A]'), ('Artist', 'Artist'),
+                                   ('Bison CF', ' BISON   CF '), ('One', '1.01. One - 00:31')]:
+            self.assertTrue(selected_matches(expected, observed), (expected, observed))
+        for expected, observed in [('A', 'Random'), ('Artist', 'Artists'),
+                                   ('Bison CF', 'Bison CFG'), ('Bison 000', 'Bison OOO')]:
+            self.assertFalse(selected_matches(expected, observed), (expected, observed))
+
+    def test_bulk_labels_are_letters_and_track_numbers_stay_numeric(self):
+        tracks = dict(library_tracks())
+        self.assertEqual(tracks['bison-000/01.flac']['ARTIST'], 'Bison BB')
+        self.assertEqual(tracks['bison-020/01.flac']['ARTIST'], 'Bison CF')
+        self.assertEqual(tracks['bison-020/01.flac']['ALBUM'], 'Opus CF')
+        self.assertEqual(tracks['bison-255/08.flac']['ARTIST'], 'Bison TT')
+        self.assertEqual(tracks['bison-020/01.flac']['TITLE'], 'Tune One')
+        self.assertEqual(tracks['bison-020/08.flac']['TITLE'], 'Tune Eight')
+        self.assertEqual(tracks['bison-020/08.flac']['TRACKNUMBER'], '8')
+
     def test_comments_preserve_streaminfo_and_audio_frames(self):
         original = b'fLaC' + block(0, bytes(34)) + block(4, b'old', True) + b'\xff\xf8frames'
         rewritten = replace_comments(original, {'ARTIST': 'Aster', 'TITLE': 'Ámber'})

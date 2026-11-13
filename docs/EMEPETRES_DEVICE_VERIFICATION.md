@@ -98,9 +98,14 @@ compared the real vendor rootfs in
 Extraction completed without reported content loss. The first strict audit
 failed on 58 versioned ALSA imports plus their two version namespaces; the
 investigation below explains the distinction between absent names and the
-vendor library's unversioned exports. The updated conditional classification
-still awaits its own full runner execution. This is not a device ABI or
-installation verification result.
+vendor library's unversioned exports. The updated full audit completed in
+[run 43395427300](https://github.com/aronfenix/emepetres/actions/runs/43395427300)
+with status `STATIC_AUDIT_CONDITIONAL_UNVERIFIED_ON_HARDWARE`: zero fatal
+comparisons, 58 explicit conditional ALSA resolutions in the application,
+and no conditional resolutions in the bootloader or Last.fm plugin. All
+29 audit unit tests passed on the Ubuntu runner. Ten unresolved evidence
+items remain, including absent vendor FP ABI attributes and the inferred
+loader behavior. This is not a device ABI or installation verification result.
 
 The workflow uses the already successful hosted artifact
 `emepetres-agptekrocker-UNVERIFIED-ON-HARDWARE` from run `43276572060`; it does
@@ -268,3 +273,8 @@ state, obtain a matching original image and practical recovery method,
 review completed target builds, and use compatible storage without formatting
 the existing music card. Additional test files may be considered under the
 user's authorization; firmware installation remains a separate blocked step.
+
+On 2026-11-13 the user deferred the physical recovery-screen check because
+the library is being organized. Further access to the music card is deferred
+until that maintenance is finished. Continue isolated source/build tests;
+recheck the connected storage state before a later device operation.
