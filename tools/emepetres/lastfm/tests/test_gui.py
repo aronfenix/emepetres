@@ -8,6 +8,7 @@ import tempfile
 import time
 import unittest
 from unittest.mock import patch
+from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from lastfm import engine
@@ -57,6 +58,113 @@ class CLI(unittest.TestCase):
                 self.assertNotIn(value, output.getvalue() + errors.getvalue())
 
 
+class DeviceImport(unittest.TestCase):
+    def app(self, directory):
+        from lastfm.gui import App
+        app = object.__new__(App)
+        app.directory = Path(directory)
+        app.root = None
+        app.busy = False
+        app.current_account = lambda: 'alice'
+        app.status = SimpleNamespace(set=lambda message: setattr(app, 'message', message))
+        app.jobs = []
+        app._job = lambda work, success: app.jobs.append((work, success))
+        return app
+
+    def complete_job(self, app):
+        work, success = app.jobs.pop(0)
+        success(work())
+
+    def test_single_device_uses_worker_preserves_source_and_never_networks(self):
+        from lastfm import device
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            log = root / '.emepetres-scrobbler.log'
+            original = b'#TZ/UTC\r\nArtist\tAlbum\tTrack\t1\t180\tL\t1700000000\r\n'
+            log.write_bytes(original)
+            app = self.app(root / 'local')
+            with patch.object(device, 'removable_roots', return_value=[root]), \
+                    patch('lastfm.gui.filedialog.askopenfilename', side_effect=AssertionError('Unnecessary chooser')), \
+                    patch.object(engine.HTTPTransport, '__call__', side_effect=AssertionError('Network during import')):
+                app.import_device()
+                self.assertFalse(app.directory.exists(), 'Import must use the worker')
+                self.complete_job(app)  # Discovery, then import worker.
+                self.assertEqual(len(app.jobs), 1)
+                app.current_account = lambda: 'bob'
+                self.complete_job(app)
+            self.assertEqual(log.read_bytes(), original)
+            self.assertEqual([p.read_bytes() for p in (app.directory / 'imports').iterdir()], [original])
+            ledger = engine.Ledger(app.directory)
+            try:
+                self.assertEqual(ledger.counts('alice'), {'pending': 1})
+                self.assertEqual(ledger.counts('bob'), {})
+            finally:
+                ledger.close()
+
+    def test_multiple_exports_require_explicit_choice_and_import_exact_selection(self):
+        from lastfm import device
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            roots = [root / 'one', root / 'two']
+            logs = []
+            for index, card in enumerate(roots):
+                card.mkdir()
+                log = card / '.emepetres-scrobbler.log'
+                log.write_text(f'#TZ/UTC\nArtist\tAlbum\tTrack {index}\t1\t180\tL\t1700000000\n')
+                logs.append(log)
+            app = self.app(root / 'local')
+            with patch.object(device, 'removable_roots', return_value=roots), \
+                    patch('lastfm.gui.simpledialog.askinteger', return_value=2) as chooser:
+                app.import_device()
+                self.complete_job(app)
+                chooser.assert_called_once()
+                self.assertIn(str(logs[0]), chooser.call_args.args[1])
+                self.assertIn(str(logs[1]), chooser.call_args.args[1])
+                self.complete_job(app)
+            ledger = engine.Ledger(app.directory)
+            try:
+                self.assertEqual([r['track'] for r in ledger.rows('alice')], ['Track 1'])
+            finally:
+                ledger.close()
+
+    def test_cancelling_multiple_choice_and_missing_export_do_not_import(self):
+        from lastfm import device
+        with tempfile.TemporaryDirectory() as directory:
+            app = self.app(Path(directory) / 'local')
+            with patch.object(device, 'removable_roots', return_value=[]):
+                app.import_device()
+                self.complete_job(app)
+            self.assertIn('Preparar sincronizacion', app.message)
+            self.assertIn('Importar registro', app.message)
+            self.assertFalse(app.directory.exists())
+            with patch.object(device, 'removable_roots', return_value=[]), \
+                    patch.object(device, 'find_exports', return_value=[Path(directory) / 'a', Path(directory) / 'b']), \
+                    patch('lastfm.gui.simpledialog.askinteger', return_value=None):
+                app.import_device()
+                self.complete_job(app)
+            self.assertEqual(app.jobs, [])
+            self.assertFalse(app.directory.exists())
+
+    def test_device_removed_before_import_has_actionable_instruction(self):
+        from lastfm import device
+        from lastfm.gui import safe_error
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            log = root / '.scrobbler.log'
+            log.touch()
+            app = self.app(root / 'local')
+            with patch.object(device, 'removable_roots', return_value=[root]):
+                app.import_device()
+                self.complete_job(app)
+            log.unlink()
+            work, _ = app.jobs.pop(0)
+            with self.assertRaises(FileNotFoundError) as missing:
+                work()
+            self.assertIn('Rocker', safe_error(missing.exception))
+            self.assertIn('Importar registro', safe_error(missing.exception))
+            self.assertFalse(app.directory.exists())
+
+
 class WindowSmoke(unittest.TestCase):
     def test_window_starts_offline_and_displays_imported_rows(self):
         import tkinter as tk
@@ -79,7 +187,9 @@ class WindowSmoke(unittest.TestCase):
                         ledger.connection.execute("UPDATE entries SET status='sending' WHERE track='Interrupted track'")
                 finally:
                     ledger.close()
-                with patch('lastfm.credentials.Vault.load', return_value={}):
+                with patch('lastfm.credentials.Vault.load', return_value={}), \
+                        patch('lastfm.gui.device.removable_roots', side_effect=AssertionError('Discovery on launch')), \
+                        patch.object(engine.Ledger, 'import_file', side_effect=AssertionError('Import on launch')):
                     with patch.object(engine.HTTPTransport, '__call__', side_effect=AssertionError('Network on launch')):
                         app = App(root, folder)
                         app.account.set('alice')

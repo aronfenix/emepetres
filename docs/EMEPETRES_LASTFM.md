@@ -113,6 +113,8 @@ El empaquetado del ejecutable se realiza en CI; PyInstaller no es necesario para
 
 El 12 de noviembre de 2026 se completó la autorización real en Windows: el usuario creó su aplicación personal y realizó la autorización del navegador. Se verificó en la interfaz «Autorizada en este equipo», con cero escuchas enviadas. Las pruebas automatizadas siguen usando únicamente datos ficticios y no necesitan estas credenciales. El envío real con una escucha auténtica y la comprobación física del reproductor siguen pendientes.
 
+El código de desarrollo incorpora también **Importar del Rocker**: busca únicamente los nombres de registro conocidos en las raíces de las unidades extraíbles, sin recorrer música ni escribir en la tarjeta. Prefiere el registro emepetres y conserva la importación manual. La suite local ampliada pasa 41 pruebas; el nuevo botón todavía requiere empaquetado y comprobación de la siguiente entrega de Windows. El ZIP ya entregado conserva la versión previamente verificada.
+
 ## Referencias de protocolo
 
 - [Last.fm: Scrobbling 2.0](https://www.last.fm/api/scrobbling): condiciones de escucha, resultados individuales y errores.

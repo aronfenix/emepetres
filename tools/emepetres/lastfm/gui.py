@@ -9,7 +9,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, simpledialog, ttk
 import webbrowser
 
-from . import engine
+from . import device, engine
 from .credentials import Vault
 
 LABELS = {
@@ -24,6 +24,8 @@ def safe_error(exc):
     """Do not surface transport bodies, URLs, tokens or credential values."""
     if isinstance(exc, engine.APIError):
         return f'Last.fm ha devuelto el código {exc.code}. Revisa la autorización.'
+    if isinstance(exc, device.DeviceUnavailableError):
+        return 'El registro del Rocker ya no está disponible. ' + device.DEVICE_HELP
     if isinstance(exc, FileNotFoundError):
         return 'No se encuentra el archivo seleccionado.'
     if isinstance(exc, PermissionError):
@@ -110,6 +112,7 @@ class App:
         ttk.Label(setup, text='Las claves se guardan cifradas para tu usuario de Windows. No se envía nada al abrir la aplicación.').grid(row=4, column=0, columnspan=3, sticky='w')
         actions = ttk.Frame(outer)
         actions.pack(fill='x', pady=12)
+        self.button(actions, 'Importar del Rocker', self.import_device).pack(side='left', padx=(0, 8))
         self.button(actions, 'Importar registro…', self.import_log).pack(side='left')
         self.button(actions, 'Enviar hasta 50 pendientes', self.sync).pack(side='left', padx=8)
         self.button(actions, 'Copia de seguridad', self.backup).pack(side='left')
@@ -259,10 +262,48 @@ class App:
                  filetypes=[('Registros de escuchas', '*.log'), ('Todos los archivos', '*.*')])
         if not path:
             return
+        self._import_path(Path(path), account)
+
+    def import_device(self):
+        if self.busy:
+            return
+        try:
+            account = self.current_account()
+        except ValueError:
+            messagebox.showinfo('Cuenta', 'Introduce la cuenta a la que pertenecerán estas escuchas.', parent=self.root)
+            return
+        self._job(lambda: device.find_exports(device.removable_roots()),
+                  lambda paths: self._device_found(paths, account))
+
+    def _device_found(self, paths, account):
+        if not paths:
+            self.status.set('No se ha encontrado un registro exportado. ' + device.DEVICE_HELP)
+            return
+        if len(paths) == 1:
+            path = paths[0]
+        else:
+            choices = '\n'.join(f'{index}. {path}' for index, path in enumerate(paths, 1))
+            selected = simpledialog.askinteger('Elige el registro del Rocker',
+                'Hay varios registros. Escribe el número del que quieres importar:\n\n' + choices,
+                parent=self.root, minvalue=1, maxvalue=len(paths))
+            if selected is None:
+                self.status.set('Importación cancelada. No se ha importado ningún registro.')
+                return
+            path = paths[selected - 1]
+        self._import_path(path, account, from_device=True)
+
+    def _import_path(self, path, account, *, from_device=False):
         def work():
+            if from_device and not device.is_export(path):
+                raise device.DeviceUnavailableError()
             ledger = engine.Ledger(self.directory)
             try:
-                return ledger.import_file(Path(path), account)
+                try:
+                    return ledger.import_file(Path(path), account)
+                except OSError:
+                    if from_device and not device.is_export(path):
+                        raise device.DeviceUnavailableError() from None
+                    raise
             finally:
                 ledger.close()
         self._job(work, lambda result: self.status.set(f'Importación: {result.added} nuevas, {result.duplicates} repetidas, {result.upgraded} completadas. Copia local conservada.'))
