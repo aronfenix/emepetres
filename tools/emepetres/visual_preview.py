@@ -34,7 +34,6 @@ def package():
     target.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(theme / 'emepetres.cfg', target)
     activation = (theme / 'emepetres.cfg').read_text(encoding='utf-8')
-    activation += 'language: /.rockbox/langs/espanol.lng\n'
     (OVERLAY / 'EMEPETRES-VISUAL.cfg').write_text(activation, encoding='utf-8')
     (OVERLAY / 'LEEME.txt').write_text(
         'Actualización visual de emepetres. No contiene update.upt.\n'

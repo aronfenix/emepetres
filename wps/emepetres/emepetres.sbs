@@ -19,7 +19,7 @@ emepetrés
 %Vl(r,0,0,120,21,2)
 %?Lc<%dr(0,0,120,21,8BE2BC)|%dr(0,0,120,21,10181D)>
 %Vl(r,6,3,108,18,2)
-%?Lc<%Vf(10181D)|%Vf(E9EEE8)>%s%LT
+%?Lc<%Vf(10181D)%Vb(8BE2BC)|%Vf(E9EEE8)%Vb(10181D)>%s%LT
 %V(6,148,116,12,4)
 %Vf(9AA9AD)
 %?mp<Volver: izquierda|%s%?it<%it|Sonando>|En pausa|Avanzando|Retrocediendo>
