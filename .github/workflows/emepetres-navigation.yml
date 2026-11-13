@@ -4,6 +4,11 @@ on:
     branches: [emepetres/dev]
     paths-ignore: ['docs/**']
   workflow_dispatch:
+    inputs:
+      extended_library:
+        description: Run the optional large-library screenshot/OCR journey
+        type: boolean
+        default: false
 permissions:
   contents: read
 jobs:
@@ -109,7 +114,7 @@ jobs:
           xvfb-run -a python3 tools/emepetres/tests/simulator_smoke.py build-agptekrocker
           xvfb-run -a python3 tools/emepetres/tests/simulator_smoke.py build-agptekrockernative
       - name: Exercise scrolling, searches and album boundaries with 2054 synthetic tracks
-        if: needs.changes.outputs.library == 'true'
+        if: needs.changes.outputs.library == 'true' && github.event_name == 'workflow_dispatch' && inputs.extended_library
         run: |
           failed=0
           for target in agptekrocker agptekrockernative; do

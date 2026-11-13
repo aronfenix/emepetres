@@ -103,6 +103,15 @@ duplicate album ownership, and adversarial multidisc data.
 
 ## Limits
 
+The user requested that optional validation costs be curtailed on 2026-11-13.
+The extended OCR journey is therefore opt-in via workflow_dispatch input
+`extended_library=true`; it is not part of ordinary pushes. Last run
+43400300387 reached the album first-letter D check in both simulators and
+failed to verify that selected letter. Do not report the complete journey as
+passed. Earlier selected artist/album/track Back/Home restoration, exact viewport
+comparison, album isolation, multidisc order and artist-first-letter steps
+completed before that point. Search queries after that point remain unexecuted.
+
 The new runner needs execution against both Linux simulators before runtime
 coverage can be claimed. Portable helper tests and Python compilation do not
 establish that any SDL navigation or OCR step passed. OCR is deliberately tied
