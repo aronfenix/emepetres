@@ -3,6 +3,7 @@ import importlib.util
 from pathlib import Path
 import tempfile
 import unittest
+import zipfile
 
 SPEC = importlib.util.spec_from_file_location(
     'vendor_audit', Path(__file__).parents[1] / 'vendor_audit.py')
@@ -53,6 +54,10 @@ class ReadelfParser(unittest.TestCase):
         with self.assertRaises(ValueError):
             audit.parse_readelf('readelf: Error: not an ELF file')
 
+    def test_missing_dynamic_symbol_table_cannot_pass_as_no_imports(self):
+        with self.assertRaises(ValueError):
+            audit.parse_readelf(HEADER.split('Symbol table')[0])
+
     def test_exports_exclude_hidden_and_local_symbols(self):
         result = info('''
   1: 00001000 24 FUNC LOCAL DEFAULT 12 local
@@ -85,6 +90,21 @@ class SymbolComparison(unittest.TestCase):
         result = audit.compare_elf(self.consumer, self.providers)
         self.assertIn('memcpy@GLIBC_2.0', '\n'.join(result['errors']))
 
+    def test_same_namespace_in_other_needed_library_cannot_supply_symbol(self):
+        text = HEADER.replace('FP ABI:', '''  0x0020: Version: 1  File: libpthread.so.0  Cnt: 1
+  0x0030:   Name: GLIBC_2.0  Flags: none  Version: 3
+FP ABI:''')
+        self.consumer = audit.parse_readelf(text)
+        self.providers['libpthread.so.0'] = self.provider.copy()
+        self.provider['exports'] = []
+        self.assertIn('memcpy@GLIBC_2.0', '\n'.join(
+            audit.compare_elf(self.consumer, self.providers)['errors']))
+
+    def test_mips_nan_encoding_mismatch_fails(self):
+        self.provider['flags'] ^= 0x400
+        result = audit.compare_elf(self.consumer, self.providers)
+        self.assertTrue(any('NaN' in item for item in result['errors']))
+
     def test_missing_needed_library_fails_even_without_imports(self):
         self.consumer['imports'] = []
         result = audit.compare_elf(self.consumer, {})
@@ -107,6 +127,11 @@ class SymbolComparison(unittest.TestCase):
 
 
 class RootfsPaths(unittest.TestCase):
+    def test_double_slash_absolute_path_stays_inside_vendor_root(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.assertEqual(audit.vendor_path(root, '//lib/libc.so.6'), root / 'lib/libc.so.6')
+
     def test_absolute_vendor_symlink_is_resolved_inside_root(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -130,6 +155,98 @@ class RootfsPaths(unittest.TestCase):
                 self.skipTest('symlinks unavailable on this host')
             with self.assertRaises(ValueError):
                 audit.vendor_path(root, 'loop')
+
+
+class ArtifactValidation(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.directory = Path(self.temporary.name)
+        self.root = self.directory / 'download/emepetres/emepetres'
+        self.root.mkdir(parents=True)
+        self.work = self.directory / 'work'
+        self.work.mkdir()
+        (self.root / 'source-revision.txt').write_text(audit.BUILD_REVISION + '\n')
+        (self.root / 'compiler-version.txt').write_text('fixture GCC 9.5.0\n')
+        for name in ('build-agptekrocker-n', 'build-agptekrocker-b'):
+            (self.root / name).mkdir()
+        self.core = self.root / 'build-agptekrocker-n/rockbox.rocker'
+        self.core.write_bytes(b'fixture application')
+        self.boot = self.root / 'build-agptekrocker-b/bootloader.rocker'
+        self.boot.write_bytes(b'fixture bootloader')
+        self.package = self.root / 'build-agptekrocker-n/rockbox.zip'
+        self.write_package(self.core.read_bytes())
+
+    def write_package(self, core):
+        with zipfile.ZipFile(self.package, 'w') as package:
+            package.writestr('.rockbox/rockbox.rocker', core)
+            package.writestr('.rockbox/rocks/apps/lastfm_scrobbler.rock', b'fixture plugin')
+        self.write_manifest()
+
+    def write_manifest(self):
+        lines = [audit.sha256(path) + '  ' + path.relative_to(self.root).as_posix()
+                 for path in (self.core, self.boot, self.package)]
+        (self.root / 'target-sha256.txt').write_text('\n'.join(lines) + '\n')
+
+    def test_finds_nested_cross_run_common_root_and_checks_packaged_core(self):
+        inputs, metadata = audit.build_inputs(self.directory / 'download', self.work)
+        self.assertEqual(inputs['application'], self.core)
+        self.assertEqual(inputs['lastfm_plugin'].read_bytes(), b'fixture plugin')
+        self.assertEqual(metadata['revision'], audit.BUILD_REVISION)
+        self.assertEqual(len(metadata['checks']), 3)
+
+    def test_mismatched_revision_and_payload_fail(self):
+        (self.root / 'source-revision.txt').write_text('wrong revision')
+        with self.assertRaisesRegex(ValueError, 'revision mismatch'):
+            audit.build_inputs(self.directory / 'download', self.work)
+        (self.root / 'source-revision.txt').write_text(audit.BUILD_REVISION)
+        self.core.write_bytes(b'changed')
+        with self.assertRaisesRegex(ValueError, 'checksum/path mismatch'):
+            audit.build_inputs(self.directory / 'download', self.work)
+
+    def test_packaged_core_mismatch_is_rejected_even_with_valid_manifest(self):
+        self.write_package(b'wrong core')
+        with self.assertRaisesRegex(ValueError, 'Packaged application differs'):
+            audit.build_inputs(self.directory / 'download', self.work)
+
+    def test_manifest_omission_cannot_bypass_output_hash_checks(self):
+        (self.root / 'target-sha256.txt').write_text('')
+        with self.assertRaisesRegex(ValueError, 'omits required'):
+            audit.build_inputs(self.directory / 'download', self.work)
+
+    def test_manifest_cannot_reference_outside_artifact_root(self):
+        outside = self.directory / 'outside'
+        outside.write_bytes(b'outside fixture')
+        (self.root / 'target-sha256.txt').write_text(audit.sha256(outside) + '  ' + str(outside))
+        with self.assertRaisesRegex(ValueError, 'checksum/path mismatch'):
+            audit.build_inputs(self.directory / 'download', self.work)
+
+
+class ScriptEvidence(unittest.TestCase):
+    def test_reports_numbered_mount_lines_without_copying_payloads(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'etc/init.d').mkdir(parents=True)
+            (root / 'etc/init.d/rcS').write_text('#!/bin/sh\nmount /dev/mmcblk0p1 /mnt/sd\n')
+            (root / 'etc/unrelated').write_text('no evidence\n')
+            result = audit.script_evidence(root)
+            self.assertEqual(result['scripts'][0]['path'], '/etc/init.d/rcS')
+            self.assertEqual(result['excerpts'], [dict(path='/etc/init.d/rcS', line=2,
+                                  text='mount /dev/mmcblk0p1 /mnt/sd')])
+
+
+class ExtractionDiagnostics(unittest.TestCase):
+    def test_content_loss_warning_fails_even_if_extractor_exits_zero(self):
+        for message in ('Warn: Data may be missing or corrupted, bad blocks',
+                        'Warn: FILE Fail: permission denied',
+                        'Warn: SYMLINK Fail: broken',
+                        'Warn: Path traversal attempt: ../../outside, discarding.',
+                        'Error: decompression failed', 'Traceback (most recent call last):'):
+            with self.subTest(message=message):
+                self.assertTrue(audit.extraction_errors(message))
+
+    def test_unprivileged_device_node_skip_does_not_impair_library_audit(self):
+        self.assertFalse(audit.extraction_errors('Warn: DEV Fail: Operation not permitted'))
 
 
 if __name__ == '__main__':

@@ -22,6 +22,8 @@ BUILD_RUN = '43276572060'
 
 def parse_readelf(text):
     """Parse GNU readelf output in the C locale, including individual symbols."""
+    if "Symbol table '.dynsym' contains" not in text:
+        raise ValueError('Missing dynamic symbol table; imports cannot be verified')
     def field(label):
         match = re.search(r'^\s*' + re.escape(label) + r':\s*(.+)$', text, re.M)
         if not match:
@@ -39,7 +41,9 @@ def parse_readelf(text):
     soname = re.search(r'\(SONAME\).*\[([^\]]+)\]', text)
     result['soname'] = soname.group(1) if soname else None
     result['needed'] = re.findall(r'\(NEEDED\).*\[([^\]]+)\]', text)
+    result['search_paths'] = re.findall(r'\((?:RPATH|RUNPATH)\).*\[([^\]]*)\]', text)
     section, library = None, None
+    version_owners = {}
     for line in text.splitlines():
         if line.startswith('Symbol table '):
             section = 'symbols' if "'.dynsym'" in line else None
@@ -59,7 +63,9 @@ def parse_readelf(text):
             parts = re.split(r'@{1,2}', decorated, maxsplit=1)
             name, version = parts[0], parts[1] if len(parts) > 1 else None
             if index == 'UND':
-                result['imports'].append(dict(name=name, version=version, weak=binding == 'WEAK'))
+                number = re.search(r'\s+\((\d+)\)\s*$', line)
+                result['imports'].append(dict(name=name, version=version, weak=binding == 'WEAK',
+                    version_index=int(number.group(1)) if number else None))
             elif visibility in ('DEFAULT', 'PROTECTED'):
                 result['exports'].append([name, version])
                 if '@@' in decorated or version is None:
@@ -72,10 +78,15 @@ def parse_readelf(text):
             match = re.search(r'\bName:\s*(\S+)', line)
             if match and library:
                 result['requires'][library].append(match.group(1))
+                number = re.search(r'\bVersion:\s*(\d+)', line)
+                if number:
+                    version_owners[int(number.group(1))] = library
         elif section == 'definitions':
             match = re.search(r'\bName:\s*(\S+)', line)
             if match:
                 result['definitions'].append(match.group(1))
+    for symbol in result['imports']:
+        symbol['provider'] = version_owners.get(symbol['version_index'])
     return result
 
 
@@ -91,13 +102,19 @@ def compare_elf(consumer, providers):
         # Compare o32/n32/64 ABI fields; PIC/CPIC/noreorder are not ABI conflicts.
         if (consumer['flags'] & 0xf060) != (provider['flags'] & 0xf060):
             errors.append('MIPS ABI flags mismatch: ' + name)
+        if (consumer['flags'] & 0x400) != (provider['flags'] & 0x400):
+            errors.append('MIPS NaN encoding mismatch: ' + name)
+        if (consumer['flags'] & 0x0f000000) != (provider['flags'] & 0x0f000000):
+            errors.append('MIPS architecture extension flags differ (requires review): ' + name)
         if (consumer['flags'] & 0xf0000000) != (provider['flags'] & 0xf0000000):
             errors.append('MIPS ISA flags differ (requires review): ' + name)
         if consumer.get('fp_abi') and provider.get('fp_abi') and consumer['fp_abi'] != provider['fp_abi']:
             errors.append('MIPS floating-point ABI differs (requires review): ' + name)
     for name, versions in consumer['requires'].items():
         provider = providers.get(name)
-        if provider:
+        if not provider:
+            errors.append('Missing version provider: ' + name)
+        else:
             for version in versions:
                 if version not in provider['definitions']:
                     errors.append('Missing version namespace: ' + name + ':' + version)
@@ -107,7 +124,12 @@ def compare_elf(consumer, providers):
         if version:
             # Verneed maps a namespace to its actual dependency. Do not accept
             # an identically named namespace exported by an unrelated library.
-            owners = [lib for lib, versions in consumer['requires'].items() if version in versions]
+            if symbol.get('provider'):
+                owners = [symbol['provider']]
+            else:
+                owners = [lib for lib, versions in consumer['requires'].items() if version in versions]
+                if len(owners) != 1:
+                    owners = []  # An ambiguous version namespace is insufficient evidence.
             candidates = [providers[lib] for lib in owners if lib in providers]
         found = any(([name, version] in item['exports'] if version else name in item['defaults'])
                     for item in candidates)
@@ -126,7 +148,7 @@ def vendor_path(root, path):
     links = 0
     while pending:
         part = pending.pop(0)
-        if part in ('/', '.'):
+        if part in ('/', '//', '.'):
             continue
         if part == '..':
             if not parts:
@@ -202,8 +224,8 @@ def readelf(path, logs, label):
     result = subprocess.run(['readelf', '-hW', '-lW', '-dW', '--dyn-syms', '-VW', '-A', str(path)],
                             text=True, capture_output=True, env=env, check=False)
     (logs / (label + '.readelf.txt')).write_text(result.stdout + result.stderr, encoding='utf-8')
-    if result.returncode:
-        raise ValueError('readelf failed: ' + label)
+    if result.returncode or result.stderr.strip():
+        raise ValueError('readelf failed or reported diagnostics: ' + label)
     info = parse_readelf(result.stdout)
     info.update(sha256=sha256(path), bytes=path.stat().st_size)
     if info['class'] != 'ELF32' or 'little endian' not in info['data'] or 'MIPS' not in info['machine']:
@@ -252,6 +274,7 @@ def script_evidence(root):
     """Upload line excerpts/metadata, never the extracted scripts themselves."""
     expression = re.compile(r'mount|mmcblk|exfat|hiby_player|recover|autoupdate|update\.upt|mtd|flash', re.I)
     scripts, hits = [], []
+    categories = dict(mount=[], startup=[], recovery=[])
     for path in rootfs_files(root):
         relative = path.relative_to(root).as_posix()
         if path.is_symlink() or not (relative.startswith('etc/') or relative.endswith('.sh')):
@@ -267,11 +290,24 @@ def script_evidence(root):
         if relevant:
             scripts.append(dict(path='/' + relative, sha256=hash256(content), bytes=len(content)))
             hits.extend(dict(path='/' + relative, **line) for line in relevant)
-    return dict(scripts=scripts, excerpts=hits)
+            if any(re.search(r'mount|mmcblk|exfat', item['text'], re.I) for item in relevant):
+                categories['mount'].append('/' + relative)
+            if relative.startswith(('etc/init.d/', 'etc/rc')) or relative == 'etc/inittab' or 'hiby_player' in text:
+                categories['startup'].append('/' + relative)
+            if any(re.search(r'recover|autoupdate|update\.upt|mtd|flash', item['text'], re.I) for item in relevant):
+                categories['recovery'].append('/' + relative)
+    return dict(scripts=scripts, excerpts=hits, categories=categories)
 
 
 def hash256(content):
     return hashlib.sha256(content).hexdigest()
+
+
+def extraction_errors(output):
+    # The extractor can emit Warn and still exit zero after losing file bytes.
+    # Missing privileged device nodes are harmless for a read-only ELF audit.
+    return bool(re.search(r'\b(?:Error|Fatal|Traceback)\b|Data may be missing|bad blocks|'
+                          r'Path traversal attempt|\b(?:DIR|FILE|SYMLINK) Fail', output, re.I))
 
 
 def audit(args, report):
@@ -280,6 +316,11 @@ def audit(args, report):
         raise ValueError('Work directory must be empty disposable storage')
     work.mkdir(parents=True, exist_ok=True)
     report['vendor'] = extract_iso(args.vendor_image, work / 'iso')
+    with (work / 'iso/system.ubi').open('rb') as rootfs_image:
+        magic = rootfs_image.read(4)
+    report['vendor']['rootfs_magic_hex'] = magic.hex()
+    report['vendor']['rootfs_container'] = ('raw UBIFS' if magic == b'\x31\x18\x10\x06' else
+                                          'UBI' if magic == b'UBI!' else 'extractor autodetection required')
     from importlib.metadata import version
     if version('ubi-reader') != '0.8.16':
         raise ValueError('Required runner extractor: ubi-reader==0.8.16')
@@ -287,7 +328,7 @@ def audit(args, report):
     extraction = subprocess.run(['ubireader_extract_files', '-o', str(work / 'rootfs'),
                                 str(work / 'iso/system.ubi')], text=True, capture_output=True, check=False)
     (args.report_dir / 'rootfs-extraction.log').write_text(extraction.stdout + extraction.stderr, encoding='utf-8')
-    if extraction.returncode or re.search(r'\b(?:Error|Fatal|Traceback)\b', extraction.stdout + extraction.stderr):
+    if extraction.returncode or extraction_errors(extraction.stdout + extraction.stderr):
         raise ValueError('UBIFS extraction failed or reported errors; inspect extraction log')
     # UBI volumes introduce extra path components; a raw UBIFS image does not.
     roots = [path.parent for path in (work / 'rootfs').rglob('lib')
@@ -296,8 +337,9 @@ def audit(args, report):
         raise ValueError('Expected exactly one extracted rootfs with lib and etc')
     root = roots[0]
     report['stock_scripts'] = script_evidence(root)
-    if not report['stock_scripts']['excerpts']:
-        report['errors'].append('No stock mount/startup/recovery script evidence found')
+    for category, paths in report['stock_scripts']['categories'].items():
+        if not paths:
+            report['unresolved'].append('No stock ' + category + ' script evidence found in inspected text files')
     inputs, report['build'] = build_inputs(args.build_dir, work)
     report['targets'], report['libraries'] = {}, {}
     aliases = {}
@@ -319,10 +361,14 @@ def audit(args, report):
         if path not in cache:
             cache[path] = readelf(path, args.report_dir, 'vendor-' + path.name)
         value = cache[path]
+        if value['soname'] and value['soname'] != name:
+            raise ValueError('Requested dependency/SONAME mismatch: ' + name + '/' + value['soname'])
         report['libraries'][name] = dict(path=chosen, resolved='/' + path.relative_to(root).as_posix(), **value)
         return value
     for label, path in inputs.items():
         consumer = readelf(path, args.report_dir, label)
+        if not consumer['fp_abi']:
+            report['unresolved'].append(label + ': no readelf MIPS FP ABI attribute')
         providers, pending = {}, list(consumer['needed'])
         while pending:
             name = pending.pop(0)
@@ -334,26 +380,33 @@ def audit(args, report):
                 report['errors'].append(label + ': ' + str(error))
                 continue
             pending.extend(item for item in providers[name]['needed'] if item not in providers)
-        comparison = compare_elf(consumer, providers)
-        report['errors'].extend(label + ': ' + error for error in comparison['errors'])
         if label != 'lastfm_plugin' and consumer['interpreter'] != '/lib/ld.so.1':
             report['errors'].append(label + ': unexpected or missing ELF interpreter')
-        if consumer['interpreter']:
-            loader_path = vendor_path(root, consumer['interpreter'])
-            if not loader_path.is_file():
-                report['errors'].append(label + ': missing vendor ELF interpreter')
-            else:
-                loader = readelf(loader_path, args.report_dir, 'vendor-loader')
-                report['loader'] = dict(path=consumer['interpreter'], **loader)
-                # ld.so exports may satisfy libc's private loader imports.
-                providers.setdefault('ld.so.1', loader)
+        # A dlopened plugin inherits the application's loader even though it
+        # has no PT_INTERP. Include its exports for libc's private imports too.
+        loader_name = consumer['interpreter'] or '/lib/ld.so.1'
+        loader_path = vendor_path(root, loader_name)
+        if not loader_path.is_file():
+            report['errors'].append(label + ': missing vendor ELF interpreter')
+        else:
+            loader = readelf(loader_path, args.report_dir, 'vendor-loader')
+            report['loader'] = dict(path=loader_name, **loader)
+            providers.setdefault('ld.so.1', loader)
+        comparison = compare_elf(consumer, providers)
+        report['errors'].extend(label + ': ' + error for error in comparison['errors'])
         closure = {}
         for name, provider in providers.items():
+            if not provider['fp_abi']:
+                report['unresolved'].append(name + ': no readelf MIPS FP ABI attribute')
+            if provider['search_paths']:
+                report['unresolved'].append(name + ': runtime RPATH/RUNPATH present: ' + repr(provider['search_paths']))
             checked = compare_elf(provider, providers)
             closure[name] = checked
             report['errors'].extend(label + ' dependency ' + name + ': ' + error for error in checked['errors'])
         report['targets'][label] = dict(elf=consumer, comparison=comparison,
                                        dependency_closure=closure)
+        if consumer['search_paths']:
+            report['unresolved'].append(label + ': runtime RPATH/RUNPATH present: ' + repr(consumer['search_paths']))
     report['limitations'] = [
         'Static byte inspection only; no vendor or MIPS executable was run.',
         'Stock 1.1 bytes are not proof of the physical player revision/current firmware.',
@@ -361,6 +414,7 @@ def audit(args, report):
         'Different ISA/FP flags fail conservatively for review. Missing FP attributes cannot prove the calling convention.',
         'Library lookup models /lib then /usr/lib; runtime loader configuration and symbol interposition remain untested.',
         'Weak unresolved symbols are recorded but do not fail ELF linking compatibility.',
+        'ubi-reader does not replay the UBIFS journal; uncommitted entries may be absent.',
         'A passing report is not an installation kit or permission to flash/format storage.',
     ]
 
@@ -373,19 +427,34 @@ def main():
     parser.add_argument('--report-dir', required=True, type=Path)
     args = parser.parse_args()
     args.report_dir.mkdir(parents=True, exist_ok=True)
-    report = dict(status='FAILED', errors=[], build_run=BUILD_RUN, expected_revision=BUILD_REVISION)
+    report = dict(status='FAILED', errors=[], unresolved=[], build_run=BUILD_RUN, expected_revision=BUILD_REVISION)
     try:
         audit(args, report)
     except Exception as error:
         report['errors'].append(type(error).__name__ + ': ' + str(error))
     report['errors'] = sorted(set(report['errors']))
-    report['status'] = 'FAILED' if report['errors'] else 'STATIC_AUDIT_PASSED_UNVERIFIED_ON_HARDWARE'
+    report['unresolved'] = sorted(set(report['unresolved']))
+    report['status'] = ('FAILED' if report['errors'] else
+        'STATIC_CHECKS_PASSED_WITH_UNRESOLVED_EVIDENCE_UNVERIFIED_ON_HARDWARE' if report['unresolved'] else
+        'STATIC_AUDIT_PASSED_UNVERIFIED_ON_HARDWARE')
     (args.report_dir / 'vendor-audit.json').write_text(json.dumps(report, indent=2), encoding='utf-8')
     lines = ['# Vendor static ABI audit', '', 'Status: ' + report['status'], '',
              'Build run: ' + BUILD_RUN, 'Build source: `' + BUILD_REVISION + '`',
              'Vendor SHA-256: `' + VENDOR_SHA256 + '`', '',
              '## Errors', '']
     lines += ['- ' + item for item in report['errors']] or ['None.']
+    lines += ['', '## Targets', '', '| Target | Bytes | Imports | Vendor dependencies | Errors |',
+              '| --- | ---: | ---: | ---: | ---: |']
+    for label, entry in report.get('targets', {}).items():
+        elf = entry['elf']
+        lines.append('| ' + label + ' | ' + str(elf['bytes']) + ' | ' + str(len(elf['imports'])) +
+                     ' | ' + str(len(entry['dependency_closure'])) + ' | ' + str(len(entry['comparison']['errors'])) + ' |')
+    lines += ['', '## Stock scripts', '']
+    for category, paths in report.get('stock_scripts', {}).get('categories', {}).items():
+        lines.append('- ' + category + ': ' + (', '.join('`' + path + '`' for path in paths) or 'not found'))
+    lines += ['', 'Exact numbered excerpts, library symbols, dependency closures and checksums are in `vendor-audit.json`.',
+              '', '## Unresolved static evidence', '']
+    lines += ['- ' + item for item in report['unresolved']] or ['None recorded; physical verification is still required.']
     lines += ['', '## Limitations', '']
     lines += ['- ' + item for item in report.get('limitations', ['Audit stopped before all checks completed.'])]
     (args.report_dir / 'vendor-audit.md').write_text('\n'.join(lines) + '\n', encoding='utf-8')

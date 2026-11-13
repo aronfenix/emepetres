@@ -1,6 +1,6 @@
 # Device build and recovery evidence
 
-Status on 2026-11-12: development verification and read-only USB inspection.
+Status on 2026-11-13: development verification and read-only USB inspection.
 No card writes, firmware installation, or tested recovery procedure.
 
 ## Connected player and existing storage
@@ -88,6 +88,94 @@ At inspection time, the same vendor page's 2017-11-01 and 2018-12-07 links
 returned HTTP 404. The hosted installation manual in this checkout explicitly
 lists stock firmware 20171101 as its supported binary-patch input. Therefore
 the downloaded 1.1 image must not be assumed suitable for that patch.
+
+## Reproducible vendor-library audit
+
+The dedicated `emepetres-vendor-audit.yml` workflow is prepared; its first full
+vendor extraction/comparison run is still pending. Local parser tests do not
+establish a match with the actual vendor libraries. Do not interpret this
+section as a successful vendor ABI or device verification result.
+
+The workflow uses the already successful hosted artifact
+`emepetres-agptekrocker-UNVERIFIED-ON-HARDWARE` from run `43276572060`; it does
+not rebuild firmware. Before downloading it, the workflow checks the GitHub
+run's successful conclusion, originating workflow and exact source revision
+`9b56f100abb7c824668ca3fb8a35332d290d1dfe`. The audit finds the artifact's
+metadata even when cross-run download preserves the nested
+`emepetres/emepetres` common directory. It verifies every manifest SHA-256,
+requires all three hosted outputs to be covered, and checks that the packaged
+core is identical to the standalone core.
+
+Only the disposable Ubuntu runner downloads and unpacks the vendor image.
+The ISO's exact byte count/SHA-256 and three internal MD5s must match before
+rootfs extraction. `system.ubi` is passed to the extractor as supplied;
+the extractor supports both raw UBIFS and an outer UBI container, so the
+filename is not treated as proof of either format. The extractor is
+[`ubi-reader` 0.8.16](https://pypi.org/project/ubi-reader/0.8.16/), maintained
+in [onekey-sec/ubi_reader](https://github.com/onekey-sec/ubi_reader). Its
+official Python wheel is SHA-256 checked before installation:
+
+`c3d05e19c8fa760061d0e32cf92e6c15c62c8d6fd2c9c64f085d2299ea924800`
+
+The runner records its installed Python packages and GNU `readelf` version.
+No extractor or development dependency is installed on the user's PC. The
+audit never runs vendor executables, target executables, startup scripts,
+mount commands, update tools or the legacy firmware patcher. Extraction
+errors and warnings about missing/corrupted file data fail the audit;
+unprivileged skips of special device nodes are permitted because those nodes
+are not needed to read ELF metadata.
+
+`tools/emepetres/vendor_audit.py` inspects the hosted application,
+bootloader and packaged Last.fm plugin, then follows their actual vendor
+library dependencies. Its checks include:
+
+- ELF32, little-endian MIPS, interpreter availability, o32/n32/64 ABI flags,
+  ISA/architecture-extension flags, NaN encoding and available floating-point
+  ABI attributes. Differences fail conservatively for review.
+- Every required dynamic library and version namespace, plus each individual
+  imported symbol and its exact version. The symbol's version index identifies
+  its actual provider; an identically named GLIBC namespace in another library
+  cannot supply a false match. Unversioned imports require an unversioned or
+  default-version export. Missing weak imports are listed separately.
+- Transitive dependencies and the vendor loader, including the loader inherited
+  by a plugin with no interpreter of its own. Vendor absolute symlinks resolve
+  inside the extracted virtual root, never the runner's `/lib`.
+- Numbered excerpts and SHA-256s for stock mount, startup and recovery-related
+  text files where found. Missing categories, missing FP attributes and runtime
+  RPATH/RUNPATH evidence are recorded explicitly as unresolved.
+
+The reports model library lookup in `/lib` then `/usr/lib`; an actual runtime
+loader/cache configuration, symbol interposition, unsupported instructions,
+audio drivers and all device behavior remain untested. Different ISA/FP flags
+may require investigation rather than proving that a binary cannot run.
+`STATIC_CHECKS_PASSED_WITH_UNRESOLVED_EVIDENCE_UNVERIFIED_ON_HARDWARE` means
+the checked requirements passed but the listed static questions remain open.
+Neither passing status validates installation or physical recovery.
+
+The workflow uploads only JSON/Markdown reports, `readelf` text and text logs
+under `emepetres-vendor-static-audit-UNVERIFIED-ON-HARDWARE`. The original
+image, rootfs, extracted scripts/libraries and compiler package stay in runner
+temporary storage and are not uploaded or cached. The workflow produces no
+patched `.upt`, installer or installation kit.
+
+Maintainer execution after integrating this change:
+
+```text
+gh workflow run emepetres-vendor-audit.yml --ref emepetres/dev
+```
+
+Review the run summary plus `vendor-audit.json` and extraction/readelf logs;
+record that run's URL and actual findings here before claiming vendor-library
+compatibility. If the original build artifact has expired, report that missing
+input rather than substituting another build silently.
+
+Local verification on 2026-11-13: 23 audit unit tests, 21 passed and two
+symlink tests skipped because this Windows session cannot create symlinks.
+Those two tests run on the Ubuntu audit runner. The fixtures cover symbol
+versions/providers, missing libraries/namespaces, MIPS flag differences,
+artifact hashes/paths, nested artifact roots, package identity, extraction
+diagnostics and stock-script excerpts. They use no device, vendor execution,
+network requests, user music or credentials.
 
 ## Recovery code evidence and limits
 

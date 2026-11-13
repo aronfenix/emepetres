@@ -1,0 +1,117 @@
+name: emepetres vendor static ABI audit
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [emepetres/dev]
+    paths:
+      - '.github/workflows/emepetres-vendor-audit.yml'
+      - 'tools/emepetres/vendor_audit.py'
+      - 'tools/emepetres/tests/test_vendor_audit.py'
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  vendor-audit:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    env:
+      BUILD_RUN: '43276572060'
+      BUILD_REVISION: '9b56f100abb7c824668ca3fb8a35332d290d1dfe'
+      BUILD_ARTIFACT: emepetres-agptekrocker-UNVERIFIED-ON-HARDWARE
+      VENDOR_SHA256: d56d5b093477ad32ad50d41f09155d23c9f9a458993d2e40e800dd704c73b8e6
+      VENDOR_URL: https://images.agptek.us/image/ROCKERVersion/ROCKERVersion1.1/update.upt
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Prepare disposable runner directories
+        shell: bash
+        run: |
+          echo "AUDIT_REPORTS=$RUNNER_TEMP/emepetres-vendor-reports" >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/emepetres-vendor-reports"
+          git rev-parse HEAD > "$RUNNER_TEMP/emepetres-vendor-reports/audit-source-revision.txt"
+      - name: Test offline parsers and comparisons
+        shell: bash
+        run: |
+          set -o pipefail
+          python -m unittest discover -s tools/emepetres/tests -p test_vendor_audit.py -v 2>&1 | tee "$AUDIT_REPORTS/parser-tests.log"
+      - name: Install read-only host inspection tools on the runner
+        shell: bash
+        run: |
+          set -o pipefail
+          sudo apt-get update
+          sudo apt-get install -y binutils
+          # Hash-check the official pinned wheel before installation. All Python
+          # dependencies stay on this disposable runner, never the user's PC.
+          mkdir "$RUNNER_TEMP/vendor-audit-wheels"
+          python -m pip download --no-deps --only-binary=:all: ubi-reader==0.8.16 -d "$RUNNER_TEMP/vendor-audit-wheels"
+          printf '%s  %s\n' c3d05e19c8fa760061d0e32cf92e6c15c62c8d6fd2c9c64f085d2299ea924800 "$RUNNER_TEMP/vendor-audit-wheels/ubi_reader-0.8.16-py3-none-any.whl" | sha256sum --check
+          python -m pip install "$RUNNER_TEMP/vendor-audit-wheels/ubi_reader-0.8.16-py3-none-any.whl" 2>&1 | tee "$AUDIT_REPORTS/extractor-install.log"
+          python -m pip freeze > "$AUDIT_REPORTS/runner-python-packages.txt"
+          readelf --version > "$AUDIT_REPORTS/readelf-version.txt"
+      - name: Verify the original successful build run
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$BUILD_RUN" > "$RUNNER_TEMP/emepetres-build-run.json"
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          source = Path(os.environ['RUNNER_TEMP']) / 'emepetres-build-run.json'
+          run = json.loads(source.read_text())
+          assert str(run['id']) == os.environ['BUILD_RUN'], 'Unexpected build run'
+          assert run['head_sha'] == os.environ['BUILD_REVISION'], 'Build revision mismatch'
+          assert run['status'] == 'completed' and run['conclusion'] == 'success', 'Build did not succeed'
+          assert run['path'] == '.github/workflows/emepetres-target-build.yml', 'Unexpected source workflow'
+          keys = ('id', 'head_sha', 'status', 'conclusion', 'path', 'html_url', 'created_at', 'updated_at')
+          report = Path(os.environ['AUDIT_REPORTS']) / 'original-build-run.json'
+          report.write_text(json.dumps({key: run[key] for key in keys}, indent=2) + '\n')
+          PY
+      - name: Download existing hosted compiler outputs without rebuilding
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.BUILD_ARTIFACT }}
+          run-id: ${{ env.BUILD_RUN }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/emepetres-hosted-input
+      - name: Download the unmodified pinned original image
+        shell: bash
+        run: |
+          curl --fail --location --proto '=https' --tlsv1.2 --retry 3 "$VENDOR_URL" --output "$RUNNER_TEMP/vendor-update.upt"
+          printf '%s  %s\n' "$VENDOR_SHA256" "$RUNNER_TEMP/vendor-update.upt" | sha256sum --check
+      - name: Extract and compare bytes without executing target code
+        shell: bash
+        run: |
+          set -o pipefail
+          python tools/emepetres/vendor_audit.py \
+            --vendor-image "$RUNNER_TEMP/vendor-update.upt" \
+            --build-dir "$RUNNER_TEMP/emepetres-hosted-input" \
+            --work-dir "$RUNNER_TEMP/emepetres-vendor-private-work" \
+            --report-dir "$AUDIT_REPORTS" 2>&1 | tee "$AUDIT_REPORTS/audit.log"
+      - name: Add audit result to the run summary
+        if: always()
+        shell: bash
+        run: |
+          if [ -f "$AUDIT_REPORTS/vendor-audit.md" ]; then
+            cat "$AUDIT_REPORTS/vendor-audit.md" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo 'Vendor audit did not reach comparison; inspect the failed step and uploaded logs.' >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Upload reports and text logs only
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: emepetres-vendor-static-audit-UNVERIFIED-ON-HARDWARE
+          retention-days: 14
+          if-no-files-found: error
+          # Never add the input image, compiler package or extracted rootfs here.
+          path: |
+            ${{ runner.temp }}/emepetres-vendor-reports/*.json
+            ${{ runner.temp }}/emepetres-vendor-reports/*.md
+            ${{ runner.temp }}/emepetres-vendor-reports/*.txt
+            ${{ runner.temp }}/emepetres-vendor-reports/*.log
