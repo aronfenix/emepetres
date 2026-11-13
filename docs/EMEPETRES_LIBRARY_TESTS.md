@@ -39,11 +39,16 @@ The checks exercise actual Rocker button input and inspect actual screenshots:
 - Four multidisc tracks selected in disc/track order: One, Two, Three, Four.
   Fixture creation order and filenames deliberately run in the reverse order.
 - Aster and Zulu each own an album named Echo. Artist browsing must isolate
-  Amber from Indigo; global Albums browsing intentionally contains both.
+  Amber from Indigo; Down wraps back to the same track in each artist's
+  single-track Echo. Global Albums browsing selects Amber, then Indigo, then
+  wraps back to Amber, proving exactly two tracks.
 - Search → First Letter → Artists → A, and Albums → D, with explicit selected
-  artist/album and excluded unrelated library names.
+  artist/album and wraparound proving exactly one matching artist or album.
 - Artist, Album, and Title searches using the actual on-screen keyboard's
   initial A key. Their unique results are Aster, Delta, and Amber respectively.
+  Down must wrap to the first shortcut for Artist/Album and remain on Amber
+  for Title. Album shortcuts begin with By album, then All tracks; artist
+  shortcuts begin with All tracks.
 
 Every asserted screen retains its PNG, raw whole-screen OCR, isolated selected-row
 OCR, and an assertion record with expected and observed values. Selection checks
@@ -54,6 +59,31 @@ whitespace are normalized. Missing,
 ambiguous, or incorrect OCR fails the run. Bounded retries recapture the same
 state and do not send additional navigation. A pixel comparison checks the
 restored scrolled list below the status/title bars.
+
+Journey semantics use the selected-row reader rather than unselected whole-screen
+OCR. Whole-screen OCR remains available for visual review. Result counts and
+artist isolation are checked by actual Down navigation and exact wraparound
+states, rather than by whether an unrelated name is readable elsewhere.
+
+Selected-row recognition keeps the original 8× thresholded PSM 7 result as its
+primary raw output. Only when that fails the exact expected phrase, it tries
+up to three alternatives: 4× Lanczos grayscale PSM 7, 4× nearest grayscale
+PSM 7, and 8× nearest grayscale PSM 13. The same isolated cursor row is used
+in every variant. Every attempted variant and its raw text are retained in
+`*-selected-variants.json` and the assertion record. No letter substitutions
+or approximate string matching are accepted.
+
+Fast runner calibration uses exact PNG bytes copied from CI run 43397843051:
+
+```sh
+python3 -m unittest discover -s tools/emepetres/tests -p test_library_ocr.py -v
+```
+
+These static fixtures reproduce the Albums/“Albuns” recognition failure and
+previously passed Artists, Bison CF, and Tune One states. The test requires
+the correct selected label and rejects wrong labels, including other visible
+Home items. It needs ffmpeg and Tesseract but no display, simulator, or music.
+Hosts without those tools report an explicit skip.
 
 Results go to `BUILD/library-results/`: `fixture.json`, `database-header.json`,
 `startup.log`, `assertions.jsonl`, numbered screenshots/OCR files, and

@@ -33,6 +33,59 @@ def selected_matches(expected, observed):
                      normalized(observed)) is not None
 
 
+def ocr_image(png, filters, mode):
+    enlarged = run(['ffmpeg', '-v', 'error', '-i', str(png), '-vf', filters,
+                    '-frames:v', '1', '-f', 'image2pipe', '-vcodec', 'png', '-'],
+                   capture_output=True).stdout
+    return run(['tesseract', 'stdin', 'stdout', '-l', 'eng', '--psm', str(mode)],
+               input=enlarged, capture_output=True).stdout.decode('utf-8')
+
+
+def read_selected(png, expected=None):
+    """OCR the actual cursor row; bounded alternatives only on exact mismatch."""
+    with Path(png).open('rb') as source:
+        header = source.read(24)
+    if header[:8] != b'\x89PNG\r\n\x1a\n' or len(header) != 24:
+        raise ValueError('selected-row reader requires a PNG screenshot')
+    width, height = struct.unpack_from('>II', header, 16)
+    rgb = run(['ffmpeg', '-v', 'error', '-i', str(png), '-f', 'rawvideo',
+               '-pix_fmt', 'rgb24', '-'], capture_output=True).stdout
+    if len(rgb) != width * height * 3:
+        raise ValueError('screenshot RGB dimensions differ from PNG header')
+    highlighted = []
+    for y in range(16, height):
+        row = rgb[y * width * 3:(y + 1) * width * 3]
+        count = sum(row[x] > 140 and row[x + 1] > 100
+                    and row[x + 2] < row[x] * 0.85 and row[x + 1] > row[x + 2] * 1.1
+                    for x in range(0, len(row), 3))
+        if count > width // 2:
+            highlighted.append(y)
+    state = dict(selected='', selected_variants=[], cursor=None)
+    if not highlighted:
+        return state
+    state['cursor'] = [min(highlighted), max(highlighted)]
+    top, bottom = max(0, min(highlighted) - 1), min(height - 1, max(highlighted) + 1)
+    crop = f'crop={width - 18}:{bottom - top + 1}:18:{top},'
+    variants = (
+        ('threshold8-psm7', 'scale=iw*8:ih*8:flags=neighbor,format=gray,'
+         r'lut=y=if(lt(val\,100)\,0\,255),pad=iw+32:ih+32:16:16:white', 7),
+        ('lanczos4-psm7', 'scale=iw*4:ih*4:flags=lanczos,format=gray,'
+         'pad=iw+32:ih+32:16:16:white', 7),
+        ('nearest4-psm7', 'scale=iw*4:ih*4:flags=neighbor,format=gray,'
+         'pad=iw+32:ih+32:16:16:white', 7),
+        ('nearest8-psm13', 'scale=iw*8:ih*8:flags=neighbor,format=gray,'
+         'pad=iw+32:ih+32:16:16:white', 13),
+    )
+    for name, filters, mode in variants:
+        text = ocr_image(png, crop + filters, mode)
+        state['selected_variants'].append(dict(name=name, text=text))
+        if len(state['selected_variants']) == 1:
+            state['selected'] = text  # Preserve the original reader's raw output.
+        if expected is None or selected_matches(expected, text):
+            break
+    return state
+
+
 class Simulator:
     def __init__(self, build, root, results):
         self.build, self.root, self.results = build, root, results
@@ -91,14 +144,7 @@ class Simulator:
         self.expect('home-route', selected=('Artists', 'Albums', 'Search')[index])
         self.key('Return')
 
-    def ocr(self, png, filters, mode):
-        enlarged = run(['ffmpeg', '-v', 'error', '-i', str(png), '-vf', filters,
-                        '-frames:v', '1', '-f', 'image2pipe', '-vcodec', 'png', '-'],
-                       capture_output=True).stdout
-        return run(['tesseract', 'stdin', 'stdout', '-l', 'eng', '--psm', str(mode)],
-                   input=enlarged, capture_output=True).stdout.decode('utf-8')
-
-    def capture(self, label):
+    def capture(self, label, expected_selected=None):
         self.alive()
         self.sequence += 1
         stem = self.results / f'{self.sequence:03d}-{label}'
@@ -112,41 +158,26 @@ class Simulator:
              g['WIDTH'] + 'x' + g['HEIGHT'], '-i',
              os.environ['DISPLAY'] + '+' + g['X'] + ',' + g['Y'],
              '-frames:v', '1', str(png)])
-        text = self.ocr(png, 'scale=iw*6:ih*6:flags=neighbor,format=gray', 6)
+        text = ocr_image(png, 'scale=iw*6:ih*6:flags=neighbor,format=gray', 6)
         stem.with_suffix('.txt').write_text(text, encoding='utf-8')
         # Locate the default theme's yellow list cursor. OCR this isolated row
         # separately, so a merely visible item cannot satisfy selection checks.
-        rgb = run(['ffmpeg', '-v', 'error', '-i', str(png), '-f', 'rawvideo',
-                   '-pix_fmt', 'rgb24', '-'], capture_output=True).stdout
-        width, height = int(g['WIDTH']), int(g['HEIGHT'])
-        highlighted = []
-        for y in range(16, height):
-            row = rgb[y * width * 3:(y + 1) * width * 3]
-            count = sum(row[x] > 140 and row[x + 1] > 100
-                        and row[x + 2] < row[x] * 0.85 and row[x + 1] > row[x + 2] * 1.1
-                        for x in range(0, len(row), 3))
-            if count > width // 2:
-                highlighted.append(y)
-        selected = ''
-        if highlighted:
-            top, bottom = max(0, min(highlighted) - 1), min(height - 1, max(highlighted) + 1)
-            filters = (f'crop={width - 18}:{bottom - top + 1}:18:{top},'
-                       'scale=iw*8:ih*8:flags=neighbor,format=gray,'
-                       r'lut=y=if(lt(val\,100)\,0\,255),pad=iw+32:ih+32:16:16:white')
-            selected = self.ocr(png, filters, 7)
-        stem.with_name(stem.name + '-selected.txt').write_text(selected, encoding='utf-8')
-        return dict(image=png.name, text=text, selected=selected,
-                    cursor=[min(highlighted), max(highlighted)] if highlighted else None)
+        selected = read_selected(png, expected_selected)
+        stem.with_name(stem.name + '-selected.txt').write_text(selected['selected'], encoding='utf-8')
+        stem.with_name(stem.name + '-selected-variants.json').write_text(
+            json.dumps(selected['selected_variants'], indent=2) + '\n', encoding='utf-8')
+        return dict(image=png.name, text=text, **selected)
 
     def expect(self, label, *, selected=None, contains=(), absent=()):
         # Retry only screen rendering/OCR, never navigation. Each attempt is
         # retained, including failures, and final failure exits nonzero.
         for attempt in range(3):
-            state = self.capture(label)
+            state = self.capture(label, selected)
             full = normalized(state['text'])
             errors = []
-            if selected and not selected_matches(selected, state['selected']):
-                errors.append(f'selected {selected!r}, observed {state["selected"]!r}')
+            if selected and not any(selected_matches(selected, variant['text'])
+                                    for variant in state['selected_variants']):
+                errors.append(f'selected {selected!r}, observed {state["selected_variants"]!r}')
             errors += [f'missing {value!r}' for value in contains if normalized(value) not in full]
             errors += [f'unexpected {value!r}' for value in absent if normalized(value) in full]
             self.assertions.write(json.dumps(dict(label=label, attempt=attempt + 1,
@@ -256,9 +287,9 @@ def initialize(sim, track_count):
 
 
 def library_checks(sim):
-    sim.expect('artists-root', contains=('Aster',), selected='All tracks')
+    sim.expect('artists-root', selected='All tracks')
     sim.key('Down', 23)  # Two shortcuts, Aster, Bison BB..CF (indices 0..20).
-    scrolled = sim.expect('artists-scrolled', selected='Bison CF', absent=('Aster',))
+    scrolled = sim.expect('artists-scrolled', selected='Bison CF')
     sim.key('Return')
     sim.key('Down', 3)
     sim.expect('bison-album', selected='Opus CF')
@@ -291,7 +322,11 @@ def library_checks(sim):
     sim.key('Down')
     sim.expect('global-echo-selected', selected='Echo')
     sim.key('Return')
-    sim.expect('global-shared-album', contains=('Amber', 'Indigo'))
+    sim.expect('global-shared-album-first', selected='Amber')
+    sim.key('Down')
+    sim.expect('global-shared-album-second', selected='Indigo')
+    sim.key('Down')
+    sim.expect('global-shared-album-wrap-two-tracks', selected='Amber')
 
     sim.route(0)
     sim.key('Up', 21)
@@ -300,7 +335,9 @@ def library_checks(sim):
     sim.key('Down', 4)
     sim.expect('aster-echo-selected', selected='Echo')
     sim.key('Return')
-    sim.expect('aster-echo-isolated', selected='Amber', absent=('Indigo',))
+    sim.expect('aster-echo-isolated', selected='Amber')
+    sim.key('Down')
+    sim.expect('aster-echo-wrap-one-track', selected='Amber')
     sim.key('Left', 2)
     sim.key('Up', 3)  # Wrap from Aster through the shortcuts to the last artist.
     sim.expect('zulu-selected', selected='Zulu')
@@ -308,31 +345,40 @@ def library_checks(sim):
     sim.key('Down', 3)
     sim.expect('zulu-echo-selected', selected='Echo')
     sim.key('Return')
-    sim.expect('zulu-echo-isolated', selected='Indigo', absent=('Amber',))
+    sim.expect('zulu-echo-isolated', selected='Indigo')
+    sim.key('Down')
+    sim.expect('zulu-echo-wrap-one-track', selected='Indigo')
 
 
 def search_checks(sim):
     sim.route(2)
-    sim.expect('search-root', selected='Artist', contains=('Album', 'Title', 'First Letter'))
+    sim.expect('search-root', selected='Artist')
     sim.key('Down', 3)
     sim.expect('first-letter-selected', selected='First Letter')
     sim.key('Return')
-    sim.expect('first-letter-kinds', selected='Artists', contains=('Albums',))
+    sim.expect('first-letter-kinds', selected='Artists')
     sim.key('Return')
     sim.key('Down')  # Numeric group precedes A.
     sim.expect('letter-a-selected', selected='A')
     sim.key('Return')
     sim.key('Down', 2)
-    sim.expect('letter-a-results', selected='Aster', absent=('Bison', 'Zulu'))
+    sim.expect('letter-a-results', selected='Aster')
+    sim.key('Down')
+    sim.expect('letter-a-wrap-one-artist', selected='All tracks')
     sim.key('Left', 2)
     sim.expect('first-letter-kinds-return', selected='Artists')
     sim.key('Down')
+    sim.expect('first-letter-albums-kind-selected', selected='Albums')
     sim.key('Return')
     sim.key('Down', 4)  # Numeric, A, B, C, D.
     sim.expect('letter-d-selected', selected='D')
     sim.key('Return')
     sim.key('Down', 3)
-    sim.expect('letter-d-albums', selected='Delta', absent=('Echo', 'Opus'))
+    sim.expect('letter-d-albums', selected='Delta')
+    sim.key('Down')
+    sim.expect('letter-d-wrap-one-album', selected='By album')
+    sim.key('Down')
+    sim.expect('letter-d-second-shortcut', selected='All tracks')
     sim.key('Left', 3)
     sim.expect('search-root-return', selected='First Letter')
     sim.key('Up', 3)
@@ -347,8 +393,13 @@ def search_checks(sim):
         sim.capture(f'query-{kind}-a-entered')
         sim.key('Up')
         sim.key('Down', shortcut_count)
-        sim.expect(f'query-{kind}-a-results', selected=value,
-                   absent=('Bison', 'Opus', 'Tune', 'Zulu', 'Indigo'))
+        sim.expect(f'query-{kind}-a-results', selected=value)
+        sim.key('Down')
+        wrapped = {'Artist': 'All tracks', 'Album': 'By album', 'Title': 'Amber'}[kind]
+        sim.expect(f'query-{kind}-wrap-one-result', selected=wrapped)
+        if kind == 'Album':
+            sim.key('Down')
+            sim.expect('query-Album-second-shortcut', selected='All tracks')
         sim.key('Left')
         sim.expect(f'query-{kind}-back', selected=kind)
         if index < 2:
